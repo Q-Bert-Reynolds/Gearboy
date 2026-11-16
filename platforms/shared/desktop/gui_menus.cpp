@@ -692,14 +692,32 @@ static void menu_emulator(void)
         if (ImGui::MenuItem("Force Game Boy (DMG)", "", &config_emulator.force_dmg))
         {
             if (config_emulator.force_dmg)
+            {
                 config_emulator.force_gba = false;
+                config_emulator.force_sgb = false;
+            }
         }
 
         if (ImGui::MenuItem("Force Game Boy Advance", "", &config_emulator.force_gba))
         {
             if (config_emulator.force_gba)
+            {
                 config_emulator.force_dmg = false;
+                config_emulator.force_sgb = false;
+            }
         }
+
+        if (ImGui::MenuItem("Force Super Game Boy", "", &config_emulator.force_sgb))
+        {
+            if (config_emulator.force_sgb)
+            {
+                config_emulator.force_dmg = false;
+                config_emulator.force_gba = false;
+                config_emulator.sgb = true;
+            }
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Use Super Game Boy hardware, including for dual-compatible GBC cartridges.\nTakes effect on the next reset or ROM load.");
 
         ImGui::MenuItem("Super Game Boy", "", &config_emulator.sgb);
         ImGui::MenuItem("SGB Border", "", &config_emulator.sgb_border);
