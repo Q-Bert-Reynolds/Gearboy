@@ -116,6 +116,7 @@ void SGB::Init()
 
 void SGB::Reset()
 {
+    m_FatPakHost.Reset();
     memset(m_Command, 0, sizeof(m_Command));
     m_CommandWriteIndex = 0;
     m_bReadyForPulse = true;
@@ -363,6 +364,13 @@ void SGB::WriteJOYP(u8 value)
 
 void SGB::Render(u16* pFrameBuffer, GB_Color_Format pixelFormat, bool incomplete)
 {
+    if (m_FatPakHost.Active() && m_FatPakHost.GetProfile()==FatPakSGBHost::TerminalV1)
+    {
+        m_FatPakHost.Render(pFrameBuffer);
+        for (unsigned i=0;i<SGB_SCREEN_WIDTH*SGB_SCREEN_HEIGHT;++i)
+            pFrameBuffer[i]=ConvertRGB15(pFrameBuffer[i],pixelFormat);
+        return;
+    }
     if (m_bBorderEmpty)
         memset(pFrameBuffer, 0, SGB_SCREEN_WIDTH * SGB_SCREEN_HEIGHT * sizeof(u16));
 
@@ -439,6 +447,7 @@ void SGB::Render(u16* pFrameBuffer, GB_Color_Format pixelFormat, bool incomplete
 void SGB::CopyScreenBuffer(const u8* pVideoFrameBuffer)
 {
     memcpy(m_ScreenBuffer, pVideoFrameBuffer, sizeof(m_ScreenBuffer));
+    m_FatPakHost.Capture(pVideoFrameBuffer);
 }
 
 int SGB::GetPlayerCount() const
@@ -547,6 +556,9 @@ void SGB::CommandReady()
     u8 commandCode = m_Command[0] >> 3;
 
     Debug("SGB command: 0x%02X (length=%d)", commandCode, m_Command[0] & 7);
+
+    m_FatPakHost.Packet(m_Command);
+    if (m_FatPakHost.Active()) m_iPlayerCount=4;
 
     switch (commandCode)
     {
@@ -1144,6 +1156,8 @@ void SGB::SaveState(std::ostream& stream)
 
 void SGB::LoadState(std::istream& stream)
 {
+    // The optional test host is outside the legacy save-state format.
+    m_FatPakHost.Reset();
     using namespace std;
 
     stream.read(reinterpret_cast<char*>(m_Command), sizeof(m_Command));

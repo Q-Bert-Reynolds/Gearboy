@@ -109,3 +109,10 @@ codeql: $(CODEQL_OBJECTS)
 # EverdriveX is embedded in these mapper objects. Rebuild every owner and
 # derived mapper when its layout changes, including GearboyCore's allocations.
 $(addprefix $(SRC_DIR)/,EverdriveX.o EverdriveOSMemoryRule.o MBC5MemoryRule.o MBC5LogoMemoryRule.o NTNewMemoryRule.o LiChengMemoryRule.o GGB81MemoryRule.o HitekMemoryRule.o VF001MemoryRule.o SintaxMemoryRule.o GearboyCore.o): $(SRC_DIR)/EverdriveX.h
+
+# SGB embeds the optional host: allocations and inline P1 reads need its layout.
+$(addprefix $(SRC_DIR)/,SGB.o IORegistersMemoryRule.o GearboyCore.o): $(SRC_DIR)/SGB.h $(SRC_DIR)/FatPakSGBHost.h
+$(SRC_DIR)/FatPakSGBHost.o: $(SRC_DIR)/FatPakSGBHost.h $(SRC_DIR)/FatPakSGBProtocol.h $(SRC_DIR)/FatPakSGBFonts.inl
+
+# Shared inline I/O includes SGB's complete type in core and desktop units.
+$(SOURCES_CXX:.cpp=.o): $(SRC_DIR)/SGB.h $(SRC_DIR)/FatPakSGBHost.h $(SRC_DIR)/IORegistersMemoryRule.h

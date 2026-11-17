@@ -273,7 +273,7 @@ static const char* const kMcpSerialTools[] =
 
 static const char* const kMcpSgbTools[] =
 {
-    "get_sgb_status"
+    "get_sgb_status", "fatpak_sgb_host"
 };
 
 static const char* const kMcpMediaTools[] =

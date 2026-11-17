@@ -392,6 +392,7 @@ The server exposes tools organized in the following categories:
 - `get_apu_status` - Get Game Boy APU status for all 4 channels (Square 1 with sweep, Square 2, Wave, Noise): volume, frequency, envelope, duty, wave RAM, panning, master volume
 - `get_serial_status` - Get SB/SC registers, decoded clock mode/speed, transfer progress and timing, serial IRQ state, and distinct link-session, remote-peer, and transport diagnostics
 - `reset_link_cable_metrics` - Reset local link-cable activity, synchronization, wait, and recovery counters
+- `fatpak_sgb_host` - Opt-in FatPak fullscreen protocol host: configure `disabled`/`v1`/`bench`, inspect model/mailbox, inject `key`/`snes_press`/mouse events, record/replay captures, export a PPM reference image, and verify the uploaded program/fonts against `SGB.DAT`. Configure before reset/upload; recording begins before the first captured frame. Hold/repeat and SNES CPU/ICD2 timing are outside this test host.
 - `get_sgb_status` - Get Super Game Boy status: SGB active, mask mode, multiplayer state, last command, transfer state, border animation, effective palettes, and attribute map
 
 ### Sprites

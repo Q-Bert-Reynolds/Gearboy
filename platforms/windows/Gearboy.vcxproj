@@ -68,6 +68,7 @@
     <ClCompile Include="..\..\src\Video.cpp" />
     <ClCompile Include="..\..\src\VgmRecorder.cpp" />
     <ClCompile Include="..\..\src\SGB.cpp" />
+    <ClCompile Include="..\..\src\FatPakSGBHost.cpp" />
     <ClCompile Include="..\..\src\TraceLogger.cpp" />
     <ClCompile Include="..\..\src\Profiler.cpp" />
     <ClCompile Include="..\shared\dependencies\miniz\miniz.c">

@@ -1807,6 +1807,27 @@ json McpServer::BuildToolList()
     });
 
     tools.push_back({
+        {"name", "fatpak_sgb_host"},
+        {"title", "FatPak SGB Test Host"},
+        {"description", "Opt-in FatPak fullscreen protocol host. Configure disabled/v1/bench before reset and upload; inspect model/mailbox; inject keys, SNES button presses or mouse events; record/replay LCD+packet streams; export reference PPM; verify uploaded program/fonts against SGB.DAT. SNES button presses inject FatPak key events; hold/repeat timing is not emulated."},
+        {"annotations", {{"readOnlyHint", false}, {"destructiveHint", false}, {"idempotentHint", false}, {"openWorldHint", false}}},
+        {"inputSchema", {
+            {"type", "object"},
+            {"properties", {
+                {"action", {{"type","string"},{"enum",{"configure","inspect","key","snes_press","mouse_click","mouse_down","mouse_drag","mouse_up","mouse_move","record","replay","image","verify_upload"}}}},
+                {"profile", {{"type","string"},{"enum",{"disabled","v1","bench"}}}},
+                {"path", {{"type","string"}}},
+                {"key", {{"type","integer"},{"minimum",1},{"maximum",255}}},
+                {"modifiers", {{"type","integer"},{"minimum",0},{"maximum",7}}},
+                {"button", {{"type","string"},{"enum",{"left","right","up","down","a","b","x","y","start","select","l","r"}}}},
+                {"row", {{"type","integer"},{"minimum",0},{"maximum",27}}},
+                {"x", {{"type","integer"},{"minimum",0},{"maximum",255}}},
+                {"buttons", {{"type","integer"},{"minimum",0},{"maximum",3}}}
+            }}, {"additionalProperties", false}
+        }}
+    });
+
+    tools.push_back({
         {"name", "get_sgb_status"},
         {"title", "Get SGB Status"},
         {"description", "Read Super Game Boy state: active, mask, multiplayer, last command, transfer, border animation, palettes, attribute map."},
@@ -3012,6 +3033,10 @@ json McpServer::ExecuteCommand(const std::string& toolName, const json& argument
         return m_debugAdapter.SetTraceLog(enabled, flags, output, memory_size,
                                           disk_size, output_path, event_filters,
                                           vblank_watch_address, vblank_watch_operation);
+    }
+    else if (normalizedTool == "fatpak_sgb_host")
+    {
+        return m_debugAdapter.FatPakSGB(arguments);
     }
     else if (normalizedTool == "get_sgb_status")
     {

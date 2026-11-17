@@ -172,7 +172,16 @@ inline u8 IORegistersMemoryRule::PerformRead(u16 address)
             u8 result = p1;
             if (IsValidPointer(m_pSGB) && m_pSGB->GetPlayerCount() > 1)
             {
-                if ((p1 & 0x30) == 0x30)
+                u8 mailbox;
+                if ((p1 & 0x30) != 0x30 &&
+                    m_pSGB->GetFatPakHost()->ReadMailbox(m_pSGB->GetCurrentPlayer(), mailbox))
+                {
+                    u8 nibble=0x0F;
+                    if ((p1 & 0x30)==0x20) nibble=mailbox&0x0F;
+                    else if ((p1 & 0x30)==0x10) nibble=mailbox>>4;
+                    result=(p1 & 0xF0)|nibble;
+                }
+                else if ((p1 & 0x30) == 0x30)
                 {
                     int player = m_pSGB->GetCurrentPlayer();
                     result = (p1 & 0xF0) | (0x0F - player);

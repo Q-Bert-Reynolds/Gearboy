@@ -7,7 +7,7 @@ GIT_VERSION := $(shell git describe --abbrev=7 --dirty --always --tags)
 UNAME_S := $(shell uname -s)
 PLATFORM = "undefined"
 
-OBJECTS += $(SOURCES_C:.c=.o) $(SOURCES_CXX:.cpp=.o)
+OBJECTS += $(patsubst ../%,.objects/%,$(SOURCES_C:.c=.o) $(SOURCES_CXX:.cpp=.o))
 
 INCLUDES += -I$(SRC_DIR)
 INCLUDES += -I$(DEPS_DIR)/miniz
@@ -28,7 +28,7 @@ CPPFLAGS += -DGEARBOY_DISABLE_VGMRECORDER=1 -DEMULATOR_BUILD=\"$(GIT_VERSION)\"
 CXXFLAGS += -std=c++11
 CFLAGS += -std=c99
 
-$(DEPS_DIR)/%.o: CPPFLAGS += -w
+.objects/platforms/shared/dependencies/%.o: CPPFLAGS += -w
 
 DEBUG ?= 0
 ifeq ($(DEBUG), 1)
@@ -55,7 +55,7 @@ else
     CXXFLAGS += -std=gnu++11
 endif
 
-all: serial link-cable-wire link-cable-manager everdrive
+all: serial link-cable-wire link-cable-manager everdrive fatpak
 
 serial: $(SERIAL_TARGET_NAME)
 	@echo Serial tests build complete for $(PLATFORM)
@@ -77,14 +77,16 @@ $(LINK_CABLE_MANAGER_TARGET_NAME): link_cable_manager_tests.cpp ../platforms/sha
 
 $(LINK_CABLE_MANAGER_TARGET_NAME): CPPFLAGS += -DLINK_CABLE_SHM_PREFIX=\"gearboy-link-tests-\"
 
-%.o: %.cpp
+.objects/%.o: ../%.cpp
+	@mkdir -p $(dir $@)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -c -o $@ $<
 
-%.o: %.c
+.objects/%.o: ../%.c
+	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
 clean:
-	rm -f $(OBJECTS) $(SERIAL_TARGET_NAME) $(LINK_CABLE_WIRE_TARGET_NAME) $(LINK_CABLE_MANAGER_TARGET_NAME) gearboy-everdrive-tests gearboy-igkb-tests
+	rm -f $(OBJECTS) $(SERIAL_TARGET_NAME) $(LINK_CABLE_WIRE_TARGET_NAME) $(LINK_CABLE_MANAGER_TARGET_NAME) gearboy-everdrive-tests gearboy-igkb-tests gearboy-fatpak-tests
 	rm -rf $(SERIAL_TARGET_NAME).dSYM $(LINK_CABLE_WIRE_TARGET_NAME).dSYM $(LINK_CABLE_MANAGER_TARGET_NAME).dSYM
 
 # Compile these small independent components directly, without reusing the
@@ -93,7 +95,7 @@ clean:
 everdrive: gearboy-everdrive-tests
 	./gearboy-everdrive-tests
 
-gearboy-everdrive-tests: $(SRC_DIR)/EverdriveX.h $(SRC_DIR)/VirtualFat.h $(SRC_DIR)/Cartridge.h everdrive_tests.cpp $(SRC_DIR)/Cartridge.cpp $(SRC_DIR)/EverdriveX.cpp $(SRC_DIR)/VirtualFat.cpp $(DEPS_DIR)/miniz/miniz.o
+gearboy-everdrive-tests: $(SRC_DIR)/EverdriveX.h $(SRC_DIR)/VirtualFat.h $(SRC_DIR)/Cartridge.h everdrive_tests.cpp $(SRC_DIR)/Cartridge.cpp $(SRC_DIR)/EverdriveX.cpp $(SRC_DIR)/VirtualFat.cpp .objects/platforms/shared/dependencies/miniz/miniz.o
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -o $@ $(filter %.cpp %.o,$^) $(LDFLAGS)
 
 .PHONY: igkb
@@ -101,3 +103,15 @@ igkb: gearboy-igkb-tests
 	./gearboy-igkb-tests
 gearboy-igkb-tests: igkb_tests.cpp $(SRC_DIR)/IGKeyboard.cpp $(SRC_DIR)/IGKeyboard.h
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -o $@ $(filter %.cpp,$^) $(LDFLAGS)
+
+.PHONY: fatpak
+fatpak: gearboy-fatpak-tests
+	./gearboy-fatpak-tests
+gearboy-fatpak-tests: fatpak_tests.cpp ../src/FatPakSGBHost.cpp ../src/FatPakSGBHost.h ../src/FatPakSGBProtocol.h ../src/FatPakSGBFonts.inl
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -o $@ fatpak_tests.cpp ../src/FatPakSGBHost.cpp $(LDFLAGS)
+
+.objects/src/SGB.o .objects/src/IORegistersMemoryRule.o .objects/src/GearboyCore.o: ../src/SGB.h ../src/FatPakSGBHost.h
+.objects/src/FatPakSGBHost.o: ../src/FatPakSGBHost.h ../src/FatPakSGBProtocol.h ../src/FatPakSGBFonts.inl
+
+# Memory's inline I/O header exposes the SGB class throughout the core.
+$(OBJECTS): ../src/SGB.h ../src/FatPakSGBHost.h ../src/IORegistersMemoryRule.h

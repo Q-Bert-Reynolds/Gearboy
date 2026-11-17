@@ -110,3 +110,7 @@ tests/gearboy-everdrive-tests
 
 # iGKB protocol regression executable
 tests/gearboy-igkb-tests
+
+# Standalone FatPak host tests and isolated core objects.
+/tests/gearboy-fatpak-tests
+/tests/.objects/

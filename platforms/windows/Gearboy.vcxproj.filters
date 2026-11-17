@@ -278,6 +278,7 @@
       <Filter>src</Filter>
     </ClCompile>
     <ClCompile Include="..\..\src\SGB.cpp">
+    <ClCompile Include="..\..\src\FatPakSGBHost.cpp">
       <Filter>src</Filter>
     </ClCompile>
     <ClCompile Include="..\..\src\TraceLogger.cpp">

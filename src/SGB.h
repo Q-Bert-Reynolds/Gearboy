@@ -21,6 +21,7 @@
 #define SGB_H
 
 #include "definitions.h"
+#include "FatPakSGBHost.h"
 
 #define SGB_SCREEN_WIDTH 256
 #define SGB_SCREEN_HEIGHT 224
@@ -87,6 +88,7 @@ public:
 public:
     SGB();
     ~SGB();
+    FatPakSGBHost* GetFatPakHost() { return &m_FatPakHost; }
     void Init();
     void Reset();
     void StartNonSGBCartridge();
@@ -142,6 +144,7 @@ private:
     void LoadDefaultBorder();
 
 private:
+    FatPakSGBHost m_FatPakHost;
     u8 m_Command[SGB_MAX_COMMAND_SIZE];
     u16 m_CommandWriteIndex;
     bool m_bReadyForPulse;

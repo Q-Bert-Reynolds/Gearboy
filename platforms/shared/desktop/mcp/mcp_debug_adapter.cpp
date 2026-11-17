@@ -3513,3 +3513,38 @@ json DebugAdapter::RemoveCheat(int index)
 
     return result;
 }
+
+json DebugAdapter::FatPakSGB(const json& args)
+{
+    auto h=m_core->GetSGB()->GetFatPakHost();
+    std::string action=args.value("action","inspect"); bool ok=true;
+    if(action=="configure") {
+        std::string profile=args.value("profile","disabled");
+        if(profile!="disabled" && profile!="v1" && profile!="bench") return {{"error","unknown profile"}};
+        h->Configure(profile=="v1"?FatPakSGBHost::TerminalV1:profile=="bench"?FatPakSGBHost::BenchV0:FatPakSGBHost::Disabled);
+    } else if(action=="record") ok=h->SetRecording(args.value("path",""));
+    else if(action=="replay") ok=h->Replay(args.value("path",""));
+    else if(action=="image") ok=h->WritePPM(args.value("path",""));
+    else if(action=="verify_upload") ok=h->VerifyDataFile(args.value("path",""));
+    else if(action=="key") ok=h->Inject(1,args.value("key",0),args.value("modifiers",0));
+    else if(action=="snes_press") {
+        std::string button=args.value("button","");
+        static const char* names[]={"left","right","up","down","a","b","x","y","start","select","l","r"};
+        static const unsigned char codes[]={0x80,0x81,0x82,0x83,10,27,0x89,8,10,0x8C,0x86,0x87}; ok=false;
+        for(unsigned i=0;i<sizeof(codes);++i) if(button==names[i]) ok=h->Inject(1,codes[i],0);
+    } else if(action=="mouse_click" || action=="mouse_down" || action=="mouse_drag" || action=="mouse_up" || action=="mouse_move") {
+        unsigned row=args.value("row",0),x=args.value("x",0),buttons=args.value("buttons",action=="mouse_up" || action=="mouse_move"?0:1);
+        if(row>=28 || x>255 || buttons>3) return {{"error","mouse geometry/buttons out of range"}};
+        unsigned event=action=="mouse_drag"?3:action=="mouse_up"?4:action=="mouse_move"?8:2;
+        ok=action=="mouse_click"?h->Click(row,x,buttons):h->Inject(event,(buttons<<5)|row,x);
+    } else if(action!="inspect") return {{"error","unknown action"}};
+    const auto& m=h->GetModel(); json rows=json::array();
+    for(const auto& row:m.rows) rows.push_back({{"font",row.font},{"flags",row.flags},{"selection",{row.start,row.end}},
+        {"chars",row.chars},{"attrs",row.attrs}});
+    return {{"ok",ok},{"profile",h->GetProfile()},{"active",h->Active()},{"frames",h->Frames()},
+        {"good",h->Good()},{"bad",h->Bad()},{"duplicates",h->Duplicates()},{"upload_bytes",h->UploadBytes()},
+        {"entry",h->Entry()},{"mailbox",h->GetMailbox()},{"last_error",h->LastError()},{"rows",rows},{"palette",m.palette},
+        {"layout",{m.top,m.textRows,m.barFlags,m.oskRows}},{"cursor",{m.cursorRow,m.cursorX,m.cursorLook}},
+        {"box",{m.boxX,m.boxWidth,m.boxTop,m.boxRows,m.boxHi}},{"osk",{m.oskLayer,m.oskKey}},
+        {"busy",m.busy},{"progress",{m.loaded,m.total}},{"launch",m.launch}};
+}
