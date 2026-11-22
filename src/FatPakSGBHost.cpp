@@ -62,7 +62,7 @@ void FatPakSGBHost::Packet(const uint8_t* p) {
         m_entry=addr; m_active=true; m_last.fill(0); m_pageAcked.fill(0); m_expected=1;
         m_model=Model(); m_events.clear(); m_mailbox.fill(0); m_eventSeq=0;
         if(m_profile==BenchV0) m_mailbox={{0xA5,0,0,0}};
-        else { Queue(SGBFS_EVENT_HELLO,1,7,true); Publish(); }
+        else { Queue(SGBFS_EVENT_HELLO,1,7|SGBFS_FEATURE_BIOS,true); Publish(); }
         m_error.clear();
     }
 }
@@ -87,7 +87,7 @@ bool FatPakSGBHost::ReadMailbox(int player,uint8_t& byte) const {
 }
 bool FatPakSGBHost::Queue(uint8_t type,uint8_t a,uint8_t b,bool control) {
     if(!control && (type==3 || type==8) && !m_events.empty() && m_events.back().type==type &&
-       (m_events.back().a>>5)==(a>>5)) { m_events.back().a=a; m_events.back().b=b; return true; }
+       (m_events.back().a>>SGBFS_MOUSE_BUTTON_SHIFT)==(a>>SGBFS_MOUSE_BUTTON_SHIFT)) { m_events.back().a=a; m_events.back().b=b; return true; }
     if(m_events.size()>=64 || (!control && m_events.size()>=61)) return false;
     Event e={type,a,b};
     if(control) {
@@ -105,15 +105,17 @@ bool FatPakSGBHost::Inject(uint8_t type,uint8_t a,uint8_t b) {
     if(!m_active || m_profile!=TerminalV1) return false;
     if(type==1) { if(!a || b>7) return false; }
     else if(type==2 || type==3 || type==4 || type==8) {
-        if((a&128) || (a&31)>=28 || (type==8 && (a>>5)) || ((type==2 || type==3) && !(a>>5))) return false;
-    } else return false;
+        unsigned row=a&SGBFS_MOUSE_ROW_MASK,buttons=a>>SGBFS_MOUSE_BUTTON_SHIFT; // (TEXT 1: 56 rows)
+        if(row>=m_model.Rows() || (type==8 && buttons) || ((type==2 || type==3) && !buttons)) return false;
+    } else if(type==9) { if(b & ~a) return false; }
+    else return false;
     bool ok=Queue(type,a,b,false);
     if(ok) { uint8_t event[3]={type,a,b}; Record(3,event,3); Publish(); }
     return ok;
 }
 bool FatPakSGBHost::Click(uint8_t row,uint8_t x,uint8_t buttons) {
-    if(row>=28 || buttons<1 || buttons>3 || m_events.size()>59) return false;
-    return Inject(2,uint8_t(row|buttons<<5),x) && Inject(4,row,x);
+    if(row>=m_model.Rows() || buttons<1 || buttons>3 || m_events.size()>59) return false;
+    return Inject(2,uint8_t(row|buttons<<SGBFS_MOUSE_BUTTON_SHIFT),x) && Inject(4,row,x);
 }
 void FatPakSGBHost::Status(const uint8_t* p) {
     if(p[0]!=83 || p[1]!=1 || p[4]>127 || p[5]>1 || CRC(p,14)!=LE16(p+14)) return;
@@ -121,6 +123,8 @@ void FatPakSGBHost::Status(const uint8_t* p) {
     if(m_mailbox[0] && p[4]==m_mailbox[0]) {
         if(m_mailbox[1]==6) m_pageAcked[m_mailbox[2]]=m_mailbox[3];
         m_mailbox.fill(0);
+        // EXIT's ACK echoed: the SNES is the BIOS's again (SGB.cpp gives the joypad back its one player)
+        if(m_model.exit && m_events.empty()) { m_active=false; m_events.clear(); }
     }
 }
 bool FatPakSGBHost::Page(unsigned slot,const uint8_t* p) {
@@ -160,7 +164,8 @@ bool FatPakSGBHost::Commands(Model& m,const uint8_t* p,unsigned n) {
         const uint8_t* b=p+at; at+=len;
         switch(op) {
         case SGBFS_CMD_ROW: {
-            if(len<7 || b[0]>=28 || b[1]>6 || b[2]>1 || b[3]>248 || (b[4]!=255 && (b[4]>248 || b[4]<b[3])) ||
+            unsigned right=m.text?64:248; // TEXT 1: selection in columns, widths unchecked
+            if(len<7 || b[0]>=m.Rows() || b[1]>6 || b[2]>1 || b[3]>right || (b[4]!=255 && (b[4]>right || b[4]<b[3])) ||
                b[5]>64 || len!=7u+b[5]+2u*b[6]) return false;
             Row r; r.font=b[1]; r.flags=b[2]; r.start=b[3]; r.end=b[4]; r.chars.assign(b+7,b+7+b[5]);
             unsigned width=0;
@@ -169,31 +174,32 @@ bool FatPakSGBHost::Commands(Model& m,const uint8_t* p,unsigned n) {
                 if(!count || !(attr&15) || (attr>>4)>14 || r.attrs.size()+count>b[5]) return false;
                 r.attrs.insert(r.attrs.end(),count,uint8_t(attr)); width+=count*(attr&15);
             }
-            if(r.attrs.size()!=b[5] || width>248) return false;
+            if(r.attrs.size()!=b[5] || (width>248 && !m.text)) return false;
             m.rows[b[0]]=r; break;
         }
         case SGBFS_CMD_ROW_SAME:
-            if(len!=2 || b[0]>=28 || b[1]>=28) return false;
+            if(len!=2 || b[0]>=m.Rows() || b[1]>=m.Rows()) return false;
             m.rows[b[0]]=m.rows[b[1]]; break;
         case SGBFS_CMD_SCROLL: {
             int d=len?int(int8_t(b[0])):0;
-            if(len!=2 || b[1]>1 || !d || d<=-28 || d>=28 || unsigned(d<0?-d:d)>m.textRows) return false;
+            int rows=int(m.Rows());
+            if(len!=2 || b[1]>1 || !d || d<=-rows || d>=rows || unsigned(d<0?-d:d)>m.textRows) return false;
             auto old=m.rows;
             for(unsigned y=0;y<m.textRows;++y) {
                 int from=int(y)+d; m.rows[m.top+y]=from>=0 && from<m.textRows?old[m.top+from]:Row();
             } break;
         }
         case SGBFS_CMD_LAYOUT:
-            if(len!=4 || b[0]>=28 || !b[1] || b[1]>28 || b[2]>3 || (b[3]!=0 && b[3]!=5) ||
-               b[0]+b[1]+b[3]+bool(b[2]&2)>28) return false;
+            if(len!=4 || b[0]>=m.Rows() || !b[1] || b[1]>m.Rows() || b[2]>3 || (b[3]!=0 && b[3]!=5) ||
+               b[0]+b[1]+bool(b[2]&2)>m.Rows()) return false;
             m.top=b[0]; m.textRows=b[1]; m.barFlags=b[2]; m.oskRows=b[3]; break;
         case SGBFS_CMD_CURSOR:
-            if(len!=3 || b[0]>=28 || b[2]>2) return false;
+            if(len!=3 || b[0]>=m.Rows() || b[2]>2) return false;
             m.cursorRow=b[0]; m.cursorX=b[1]; m.cursorLook=b[2]; break;
         case SGBFS_CMD_BOX:
             if(len!=5) return false;
             if(!LE16(b+1)) { for(unsigned i=0;i<5;++i) if(b[i]) return false; }
-            else if(LE16(b+1)<8 || b[0]+LE16(b+1)>256 || !b[4] || b[3]+b[4]>28) return false;
+            else if(LE16(b+1)<8 || b[0]+LE16(b+1)>256 || !b[4] || b[4]>28 || b[3]+b[4]>m.Rows()) return false;
             m.boxX=b[0]; m.boxWidth=LE16(b+1); m.boxTop=b[3]; m.boxRows=b[4]; m.boxHi=255;
             m.boxLines=std::array<Row,28>(); break;
         case SGBFS_CMD_BOX_LINE: case SGBFS_CMD_BAR: {
@@ -219,16 +225,97 @@ bool FatPakSGBHost::Commands(Model& m,const uint8_t* p,unsigned n) {
         case SGBFS_CMD_LAUNCH:
             if(len!=1 || b[0]!=1) return false;
             m.launch=true; break;
+        case SGBFS_CMD_MAP:
+            if(len!=1 || (b[0]&~SGBFS_MAP_HIRES)>2 || b[0]==SGBFS_MAP_HIRES || (b[0] && m.text)) return false;
+            m.mapMode=b[0]; break;
+        case SGBFS_CMD_MAP_TILES:
+            if(len<2 || !b[1] || b[1]>SGBFS_MAP_TILES_MAX || b[0]+b[1]>256 || len!=2u+16u*b[1]) return false;
+            std::copy(b+2,b+len,m.mapTiles.begin()+16*b[0]); break;
+        case SGBFS_CMD_MAP_COLORS:
+            if(len<2 || !b[1] || b[1]>8 || b[0]+b[1]>8 || len!=2u+8u*b[1]) return false;
+            for(unsigned i=0;i<4u*b[1];++i) { unsigned c=LE16(b+2+2*i); if(c&0x8000) return false; m.mapColors[b[0]*4+i]=c; } break;
+        case SGBFS_CMD_MAP_CELLS: {
+            if(len<4 || b[0]>=SGBFS_MAP_WIDTH || b[1]>=SGBFS_MAP_HEIGHT || b[2]>1 || !b[3] || b[3]>SGBFS_MAP_CELLS_MAX || len!=4u+2u*b[3]) return false;
+            for(unsigned i=0;i<b[3];++i) if(b[5+2*i]>=8) return false;
+            unsigned hires=m.mapMode&SGBFS_MAP_HIRES,x=hires?b[0]:b[0]&63,y=hires?b[1]:b[1]&31;
+            for(unsigned i=0;i<b[3];++i) {
+                m.mapCells[y*128+x]=uint16_t(b[4+2*i]|b[5+2*i]<<10);
+                if(b[2]) y=(y+1)&(hires?63:31); else x=(x+1)&(hires?127:63);
+            } break;
+        }
+        case SGBFS_CMD_MAP_SCROLL:
+            if(len!=4 || LE16(b)>=1024 || LE16(b+2)>=512) return false;
+            m.mapX=LE16(b); m.mapY=LE16(b+2); break;
+        case SGBFS_CMD_CODE: // the SNES kernel's extension: the model has no 65816 code to run
+            if(len<4 || len>3u+SGBFS_CODE_MAX || b[0]>1 || LE16(b+1)+(len-3)>SGBFS_CODE_SIZE) return false;
+            m.codeBytes+=len-3; break;
+        case SGBFS_CMD_TEXT: // the rows cleared (the GB sends them again), the box closed
+            if(len!=1 || b[0]>1 || m.mapMode) return false;
+            if(m.text!=b[0]) {
+                m.text=b[0]; m.rows=std::array<Row,56>(); m.top=0; m.textRows=uint8_t(m.Rows());
+                m.boxX=m.boxTop=m.boxRows=0; m.boxWidth=0; m.boxHi=255; m.boxLines=std::array<Row,28>();
+            } break;
         case SGBFS_CMD_HELLO: case SGBFS_CMD_RESET:
             if(len!=2 || b[0]!=1 || b[1]!=0) return false;
             m=Model(); break;
+        case SGBFS_CMD_EXIT: // alone in its page
+            if(len || n!=3) return false;
+            m.exit=true; break;
         default: return false;
         }
     }
     return true;
 }
+// TEXT 1 (snes/char.s) at half size: a character a 4x4 cell of every other glyph pixel and line, in its class's
+// paper and ink (text, dim, keyword, string, number, label, selected, inverse); bars and the selection selected,
+// a box framed by its cells, the cursor
+static void RenderCells(const FatPakSGBHost::Model& m,uint16_t* pixels) {
+    static const uint8_t styleClass[16]={0,0,0,0,1,3,2,2,1,2,2,3,4,5,5,0},paper[8]={0,0,0,0,0,0,1,3},ink[8]={3,2,4,5,6,7,3,0};
+    for(unsigned r=0;r<56;++r) {
+        uint16_t cg[64]; uint8_t cc[64];
+        std::fill(cg,cg+64,uint16_t(' ')); std::fill(cc,cc+64,uint8_t(0));
+        auto put=[&](const FatPakSGBHost::Row& row,unsigned x,unsigned end,uint8_t cls) {
+            unsigned n=unsigned(row.chars.size());
+            for(unsigned i=0;i<n && x<end;++i) {
+                unsigned c=row.chars[i];
+                if(!row.flags && c==127) {
+                    while(i+1<n && row.chars[i+1]==127) ++i;
+                    unsigned k=n; while(k>i+1 && row.chars[k-1]==' ') --k;
+                    unsigned count=k-i-1; x=end>=x+count?end-count:x; continue;
+                }
+                cg[x]=uint16_t(c); cc[x]=row.flags && i<row.attrs.size()?styleClass[row.attrs[i]>>4]:cls; ++x;
+            }
+        };
+        bool bar=(r==0 && (m.barFlags&1)) || (r==55 && (m.barFlags&2));
+        if(bar) { std::fill(cc,cc+64,uint8_t(6)); put(m.bars[r?1:0],0,63,6); }
+        else {
+            const FatPakSGBHost::Row& row=m.rows[r]; put(row,0,63,0);
+            if(row.start!=row.end) for(unsigned x=row.start;x<(row.end==255?64u:row.end);++x) cc[x]=6;
+        }
+        if(m.boxWidth && r>=m.boxTop && r<unsigned(m.boxTop+m.boxRows)) {
+            unsigned rel=r-m.boxTop,left=m.boxX/4,right=(m.boxX+m.boxWidth)/4-1;
+            for(unsigned x=left;x<=right;++x) { cg[x]=' '; cc[x]=0; }
+            cg[left]=cg[right]=257; put(m.boxLines[rel],left+1,right,0);
+            auto frame=[&](uint16_t corner) { cg[left]=corner; cg[right]=uint16_t(corner+1);
+                for(unsigned x=left+1;x<right;++x) if(cg[x]==' ') cg[x]=256; };
+            if(!rel) frame(258);
+            if(rel+1==m.boxRows) frame(260);
+            if(rel==m.boxHi) for(unsigned x=left;x<=right;++x) cc[x]=6;
+        }
+        if(!r && m.busy) cc[63]=7;
+        if(r==55 && m.total) for(unsigned x=0;x<uint64_t(m.loaded)*64/m.total;++x) cc[x]=7;
+        static const uint8_t frames[6][8]={{0,0,0,0xFF,0,0,0,0},{0x10,0x10,0x10,0x10,0x10,0x10,0x10,0x10},
+            {0,0,0,0x1F,0x10,0x10,0x10,0x10},{0,0,0,0xF0,0x10,0x10,0x10,0x10},{0x10,0x10,0x10,0x1F,0,0,0,0},{0x10,0x10,0x10,0xF0,0,0,0,0}};
+        for(unsigned x=0;x<64;++x) for(unsigned y=0;y<4;++y) for(unsigned p=0;p<4;++p) {
+            unsigned bits=cg[x]<256?kFatPakGlyphs[0][cg[x]*8+y*2]:frames[cg[x]-256][y*2];
+            pixels[(r*4+y)*256+x*4+p]=m.palette[bits&(0x80>>(p*2))?ink[cc[x]]:paper[cc[x]]];
+        }
+    }
+    if(m.cursorLook) for(unsigned y=0;y<4;++y) pixels[(m.cursorRow*4+y)*256+m.cursorX]=m.cursorLook==2?0x7FFF:m.palette[3];
+}
 void FatPakSGBHost::Render(uint16_t* pixels) const {
     const Model& m=m_model;
+    if(m.text) { RenderCells(m,pixels); return; }
     std::fill(pixels,pixels+256*224,m.palette[0]);
     auto line=[&](const Row& r,unsigned row,unsigned left,unsigned right,bool selected) {
         if(row>=28 || left>=right || right>256) return;
@@ -264,14 +351,29 @@ void FatPakSGBHost::Render(uint16_t* pixels) const {
             pixels[(row*8+y)*256+px]=m.palette[color];
         }
     };
-    for(unsigned y=0;y<28;++y) line(m.rows[y],y,8,256,false);
-    if(m.barFlags&1) line(m.bars[0],0,8,256,false);
-    if(m.barFlags&2) line(m.bars[1],27,8,256,false);
+    if(m.mapMode) { // BG1: the map instead of the text rows, 4-colour GB tiles in 8 palettes (512x448's every
+        // other pixel)
+        unsigned hires=m.mapMode&SGBFS_MAP_HIRES?1:0;
+        for(unsigned y=0;y<224;++y) for(unsigned x=0;x<256;++x) {
+            unsigned bx=((x<<hires)+m.mapX)&(hires?1023:511),by=((y<<hires)+m.mapY)&(hires?511:255);
+            unsigned cell=m.mapCells[(by>>3)*128+(bx>>3)];
+            const uint8_t* row=&m.mapTiles[(cell&255)*16+(by&7)*2];
+            unsigned bit=7-(bx&7),c=((row[0]>>bit)&1)|(((row[1]>>bit)&1)<<1);
+            pixels[y*256+x]=m.mapColors[((cell>>10)&7)*4+c];
+        }
+    }
+    else for(unsigned y=0;y<28;++y) line(m.rows[y],y,8,256,false);
+    unsigned bars=(m.mapMode&3)==2?0:m.barFlags; // a full screen map hides them
+    if(bars&1) line(m.bars[0],0,8,256,false);
+    if(bars&2) line(m.bars[1],27,8,256,false);
     if(m.oskRows) {
         static const char* keys[]={"1234567890qwertyuiopasdfghjkl;zxcvbnm,./",
             "!@#$%^&*()QWERTYUIOPASDFGHJKL:ZXCVBNM<>?",
             "`~-_=+[]{}\\|'\"\xA1\xBF\xE1\xE9\xED\xF3\xFA\xF1\xFC"};
         const char* k=keys[m.oskLayer==3?1:m.oskLayer]; unsigned length=unsigned(std::strlen(k));
+        unsigned panel=28-unsigned(bool(m.barFlags&2))-7;
+        for(unsigned y=panel*8;y<(panel+7)*8;++y)for(unsigned x=44;x<212;++x)
+            pixels[y*256+x]=m.palette[0];
         for(unsigned y=0;y<5;++y) {
             Row r; r.chars.assign(20,' ');
             for(unsigned x=0;x<10;++x) if(y<4 && y*10+x<length) r.chars[x*2]=uint8_t(k[y*10+x]);
@@ -279,13 +381,15 @@ void FatPakSGBHost::Render(uint16_t* pixels) const {
                 const uint8_t b[20]={29,' ','#',' ',31,' ','_','_','_','_','_','_','_','_',15,' ',16,' ',30,' '};
                 r.chars.assign(b,b+20); if(m.oskLayer==3) r.chars[0]=25;
             }
-            line(r,m.top+m.textRows+y,4,256,false);
+            line(r,panel+1+y,52,204,false);
             if(m.oskKey!=255 && m.oskKey/10==y) {
-                unsigned x=4+(m.oskKey%10)*16;
+                unsigned x=52+(m.oskKey%10)*16;
                 for(unsigned yy=0;yy<8;++yy) for(unsigned xx=x;xx<x+8;++xx)
-                    pixels[(m.top+m.textRows+y)*2048+yy*256+xx]^=0x7FFF;
+                    pixels[(panel+1+y)*2048+yy*256+xx]^=0x7FFF;
             }
         }
+        for(unsigned y=panel*8;y<(panel+7)*8;++y){pixels[y*256+44]=m.palette[3];pixels[y*256+211]=m.palette[3];}
+        for(unsigned x=44;x<212;++x){pixels[panel*2048+x]=m.palette[3];pixels[(panel+7)*2048-256+x]=m.palette[3];}
     }
     if(m.boxWidth) {
         for(unsigned y=0;y<m.boxRows;++y) {

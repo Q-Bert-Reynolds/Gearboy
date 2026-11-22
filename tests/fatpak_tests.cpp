@@ -45,7 +45,7 @@ int main(int argc,char** argv) {
     FatPakSGBHost h; uint8_t packet[16]={0x91,0,0,0x7F}; h.Packet(packet); Check(!h.Active(),"ordinary SGB unaffected");
     h.Configure(FatPakSGBHost::TerminalV1); h.Packet(packet); Check(!h.Active(),"JUMP before upload rejected");
     Start(h); Check(h.GetMailbox()[1]==5,"HELLO published");
-    Check(!h.Inject(2,28|32,0) && !h.Inject(1,0,0),"invalid input rejected");
+    Check(!h.Inject(2,28|64,0) && !h.Inject(1,0,0),"invalid input rejected"); // (row 28, the left button: rows << 6)
     Check(h.Inject(1,'A',1),"key queues behind HELLO");
     auto hello=h.GetMailbox(); uint8_t empty[160*144]={}; h.Capture(empty); Check(h.GetMailbox()==hello,"invalid status cannot release mailbox");
     Echo(h); Check(h.GetMailbox()[1]==1 && h.GetMailbox()[2]=='A',"valid echo releases next event"); Echo(h);
@@ -69,7 +69,7 @@ int main(int argc,char** argv) {
     b.clear(); TLV(b,14,{1}); p=Page(4,b); Check(h.Page(1,p.data()),"launch accepted");
     bool ready=false; for(int i=0;i<12;++i) { ready|=h.GetMailbox()[1]==7; Echo(h); } Check(ready,"LAUNCH_READY");
     for(unsigned seq=5;seq<=260;++seq) { p=Page((seq-1)%255+1,{}); Check(h.Page(seq&1,p.data()),"255->1 global sequence wrap"); Echo(h); }
-    Start(h); unsigned count=0; while(h.Inject(2,32,30)) ++count; Check(count==61,"reserve three control queue slots");
+    Start(h); unsigned count=0; while(h.Inject(2,64,30)) ++count; Check(count==61,"reserve three control queue slots");
     Check(!h.Click(0,0,1),"click cannot strand a pressed edge at queue limit");
     h.Reset(); Check(!h.Active() && !h.Good(),"reset clears host");
     // LCD captures exercise global B-before-A ordering in the v1 transport.

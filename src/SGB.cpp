@@ -447,7 +447,14 @@ void SGB::Render(u16* pFrameBuffer, GB_Color_Format pixelFormat, bool incomplete
 void SGB::CopyScreenBuffer(const u8* pVideoFrameBuffer)
 {
     memcpy(m_ScreenBuffer, pVideoFrameBuffer, sizeof(m_ScreenBuffer));
+    bool fatpak=m_FatPakHost.Active();
     m_FatPakHost.Capture(pVideoFrameBuffer);
+    if (fatpak && !m_FatPakHost.Active())
+    {
+        // EXIT: the BIOS's one player again (the kernel's four-player mailbox off)
+        m_iPlayerCount = 1;
+        m_iCurrentPlayer = 0;
+    }
 }
 
 int SGB::GetPlayerCount() const
