@@ -1,6 +1,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <string>
+#include <sys/stat.h>
 #include <unistd.h>
 #include "Cartridge.h"
 #include "EverdriveX.h"
@@ -20,6 +22,17 @@ static void Check(bool ok, const char* message)
 static u32 Get32(const u8* p)
 {
     return (u32)p[0] | ((u32)p[1] << 8) | ((u32)p[2] << 16) | ((u32)p[3] << 24);
+}
+
+static void Put32(u8* p, u32 value)
+{
+    for (unsigned i = 0; i < 4; i++)
+        p[i] = (u8)(value >> (8 * i));
+}
+
+static u32 FirstCluster(const u8* entry)
+{
+    return entry[26] | (entry[27] << 8) | ((u32)entry[20] << 16) | ((u32)entry[21] << 24);
 }
 
 static void TestDetection()
@@ -56,7 +69,7 @@ static void TestFat(const char* root)
     u32 data_start = partition + reserved + 2 * fat_sectors;
     fat.ReadSector(data_start, sector);
     Check(!memcmp(sector, "PROBE   BIN", 11), "root directory at two-FAT data offset");
-    u32 file_cluster = (sector[26] | (sector[27] << 8)) | ((u32)(sector[20] | (sector[21] << 8)) << 16);
+    u32 file_cluster = FirstCluster(sector);
     fat.ReadSector(data_start + (file_cluster - 2) * 64, sector);
     Check(!memcmp(sector, "test data", 9), "read host file contents");
     u32 first_fat = partition + reserved;
@@ -64,12 +77,99 @@ static void TestFat(const char* root)
     fat.ReadSector(first_fat + fat_sectors, mirror);
     Check(!memcmp(sector, mirror, 512), "FAT copies initially match");
     // Change a free entry through the second copy and verify both read back.
-    sector[400] = 0xFF; sector[401] = 0xFF; sector[402] = 0xFF; sector[403] = 0x0F;
+    Put32(sector + 400, 0x0FFFFFFF);
     fat.WriteSector(first_fat + fat_sectors, sector);
     fat.ReadSector(first_fat, mirror);
     Check(Get32(mirror + 400) == 0x0FFFFFFF, "second FAT write updates shared chain");
     fat.ReadSector(first_fat + fat_sectors, sector);
     Check(!memcmp(sector, mirror, 512), "FAT copies match after write");
+}
+
+static void TestLazyFat(const char* root)
+{
+    const u32 fat_entries = 512 / 4;
+    const u32 end_of_chain = 0x0FFFFFFF;
+    const std::string folder = std::string(root) + "/GAMES";
+    const std::string rom = folder + "/GAME.BIN";
+    const std::string save = folder + "/SAVE.BIN";
+    Check(mkdir(folder.c_str(), 0700) == 0, "create host subfolder");
+    FILE* file = fopen(rom.c_str(), "wb");
+    Check(file != NULL, "create host ROM fixture");
+    Check(fwrite("first", 1, 5, file) == 5, "write first ROM cluster");
+    Check(fseek(file, fat_entries * 64 * 512, SEEK_SET) == 0, "seek past one FAT sector of clusters");
+    Check(fwrite("last", 1, 4, file) == 4 && fclose(file) == 0, "write last ROM cluster");
+
+    VirtualFat fat;
+    Check(fat.Open(root), "open virtual disk with lazy folder");
+    u8 sector[512];
+    fat.ReadSector(0, sector);
+    const u32 partition = Get32(sector + 454);
+    fat.ReadSector(partition, sector);
+    const u32 cluster_sectors = sector[13];
+    const u32 fat_start = partition + sector[14] + (sector[15] << 8);
+    const u32 data_start = fat_start + sector[16] * Get32(sector + 36);
+    fat.ReadSector(data_start, sector);
+    Check(!memcmp(sector, "GAMES      ", 11), "find unopened host folder");
+    const u32 dir_sector = data_start + (FirstCluster(sector) - 2) * cluster_sectors;
+
+    // GBCOS can allocate one cluster and stage a data write before reading the folder.
+    fat.ReadSector(fat_start, sector);
+    u32 guest = 3;
+    while (guest + 1 < fat_entries && Get32(sector + guest * 4))
+        guest++;
+    Check(guest + 1 < fat_entries && !Get32(sector + (guest + 1) * 4), "find two free guest clusters");
+    Put32(sector + guest * 4, end_of_chain);
+    fat.WriteSector(fat_start, sector);
+
+    const u32 save_sector = data_start + (guest - 1) * cluster_sectors;
+    u8 payload[512];
+    memset(payload, 0x57, sizeof(payload));
+    fat.WriteSector(save_sector, payload);
+    u8 cached_fat[8][512];
+    for (u32 i = 0; i < sizeof(cached_fat) / sizeof(cached_fat[0]); i++)
+        fat.ReadSector(fat_start + i, cached_fat[i]);
+
+    fat.ReadSector(dir_sector, sector);
+    const u8* entry = sector + 64;
+    Check(!memcmp(entry, "GAME    BIN", 11), "read lazy host file entry");
+    u32 cluster = FirstCluster(entry);
+    Check(cluster != guest && cluster != guest + 1, "lazy host allocation overlaps a guest cluster");
+    const u32 first = cluster;
+    const u32 cached_index = first / fat_entries;
+    Check(cached_index < sizeof(cached_fat) / sizeof(cached_fat[0]), "host file starts within the cached FAT");
+    fat.WriteSector(fat_start + cached_index, cached_fat[cached_index]);
+    fat.ReadSector(data_start + (first - 2) * cluster_sectors, sector);
+    Check(!memcmp(sector, "first", 5), "read ROM header after guest writes");
+    for (u32 i = 0; i < fat_entries; i++)
+    {
+        fat.ReadSector(fat_start + cluster / fat_entries, sector);
+        cluster = Get32(sector + (cluster % fat_entries) * 4);
+        Check(cluster >= 2 && cluster < 0x0FFFFFF0, "cached FAT write preserves host chain");
+    }
+    Check(cluster > first + fat_entries, "host chain crosses two allocation ranges");
+    fat.ReadSector(data_start + (cluster - 2) * cluster_sectors, sector);
+    Check(!memcmp(sector, "last", 4), "read last ROM cluster across the guest range");
+
+    fat.ReadSector(save_sector, sector);
+    Check(!memcmp(sector, payload, sizeof(payload)), "preserve the guest's staged data");
+    fat.ReadSector(fat_start, sector);
+    Check(Get32(sector + guest * 4) == end_of_chain, "preserve the guest's allocated cluster");
+    Put32(sector + (guest + 1) * 4, end_of_chain);
+    fat.WriteSector(fat_start, sector);
+
+    fat.ReadSector(dir_sector, sector);
+    u8* new_entry = sector + 96;
+    memcpy(new_entry, "SAVE    BIN", 11);
+    new_entry[11] = 0x20;
+    new_entry[26] = (u8)(guest + 1);
+    Put32(new_entry + 28, sizeof(payload));
+    fat.WriteSector(dir_sector, sector);
+    file = fopen(save.c_str(), "rb");
+    Check(file && fread(sector, 1, sizeof(sector), file) == sizeof(sector) &&
+        !memcmp(sector, payload, sizeof(payload)) && fclose(file) == 0, "guest save written to host folder");
+    unlink(save.c_str());
+    unlink(rom.c_str());
+    rmdir(folder.c_str());
 }
 
 static u8 Transfer(EverdriveX& card, u8 data)
@@ -259,6 +359,7 @@ int main()
     TestI2C(root);
     TestCalendar(root);
     unlink(path);
+    TestLazyFat(root);
     rmdir(root);
     puts("EverDrive tests passed");
     return 0;
