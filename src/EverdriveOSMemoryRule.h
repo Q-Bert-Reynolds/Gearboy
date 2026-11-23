@@ -52,6 +52,7 @@ public:
     void EnterFromGame(u8 ramg, u8 mode, u8 ramb, u8 romb);
     int TakeSwitch(); // 1: resume game, 2: reset into OS, 3: warm return to OS
     int PeekSwitch();
+    bool IsButtonEnabled() const { return (m_Config & 0x20) == 0; } // $BD06 bit 5 inhibits the cart button
     const std::vector<u8>& GetImage();
     u8* GetSaveRAM();
     u8 GetCartridgeFeatures() const;
