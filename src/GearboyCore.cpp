@@ -237,9 +237,9 @@ bool GearboyCore::RunToVBlank(u16* pFrameBuffer, s16* pSampleBuffer, int* pSampl
 
     if (!m_bPaused && m_pCartridge->IsLoadedROM())
     {
+        int totalClocks = 0;
 #if !defined(GEARBOY_DISABLE_DISASSEMBLER)
         bool vblank = false;
-        int totalClocks = 0;
 
         do
         {
@@ -281,7 +281,6 @@ bool GearboyCore::RunToVBlank(u16* pFrameBuffer, s16* pSampleBuffer, int* pSampl
 #else
         UNUSED(debug);
         bool vblank = false;
-        int totalClocks = 0;
 
         do
         {
@@ -308,6 +307,8 @@ bool GearboyCore::RunToVBlank(u16* pFrameBuffer, s16* pSampleBuffer, int* pSampl
                 RenderFrameBuffer(pFrameBuffer);
         }
 #endif
+        if (m_pMemory->GetCurrentRule() == m_pEverdriveOSMemoryRule || IsValidPointer(m_pEverdriveGameRule))
+            m_pEverdriveOSMemoryRule->AdvanceCycles(totalClocks);
     }
 
     if (m_pEverdriveOSMemoryRule->LaunchRequested())
