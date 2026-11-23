@@ -299,7 +299,7 @@ static const char* const kMcpRewindTools[] =
 
 static const char* const kMcpInputTools[] =
 {
-    "controller_button", "controller_macro", "get_input_state", "ps2_key"
+    "everdrive_cart_button", "controller_button", "controller_macro", "get_input_state", "ps2_key"
 };
 
 static const char* const kMcpTraceTools[] =

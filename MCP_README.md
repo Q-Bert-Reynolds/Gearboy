@@ -425,6 +425,7 @@ The server exposes tools organized in the following categories:
 - `remove_cheat` - Remove a cheat by index
 
 ### Controller Input
+- `everdrive_cart_button` - Press the same EverDrive cartridge button as the desktop menu. Returns `enabled: true` if Gearboy accepted the press.
 - `controller_button` - Control a button on the Game Boy. Use action 'press' to hold the button, 'release' to let it go, or 'press_and_release' to simulate a quick tap. Buttons: up, down, left, right, a, b, start, select
 - `controller_macro` - Run an ordered input macro. Top-level `player` defaults to 1, and each command may override it. Supported commands are `tap`, `press`, `release`, and `wait`; timing is explicit through `wait` frame counts
 - `get_input_state` - Get effective pressed buttons and pending tap releases
