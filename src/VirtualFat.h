@@ -70,6 +70,8 @@ private:
     };
 
     int AddNode(const std::string& path, bool dir, u32 size, u32 time, int parent);
+    void AppendRun(int node, u32 first, u32 count);
+    u32 HostClustersLeft() const;
     bool Allocate(int node, u32 count);
     void List(int node);
     void MakeShortName(const std::string& name, const std::set<std::string>& used, u8* short_name, u8* case_flags, bool* needs_long_name);
@@ -90,7 +92,6 @@ private:
     u32 m_fat_sectors;
     u32 m_data_start;
     u32 m_next_cluster;
-    u32 m_gb_clusters;
     std::vector<Node> m_nodes;
     std::map<u32, Owner> m_owners; // first cluster of each run
     std::map<u32, u32> m_fat; // FAT entries the Game Boy changed

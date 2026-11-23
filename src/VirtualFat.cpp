@@ -22,6 +22,8 @@ static const u32 k_reserved = 32;
 static const u32 k_fat_count = 2; // stock GBCOS computes data start using two FATs
 static const u32 k_cluster_sectors = 64;
 static const u32 k_cluster_bytes = k_cluster_sectors * 512;
+static const u32 k_fat_entries = 512 / 4;
+static const u32 k_host_reserved = 0x0FFFFFF6; // FAT32 reserved, never free to a guest allocator
 static const u32 k_eoc = 0x0FFFFFFF;
 static const u32 k_max_chain = 0x20000; // 4GB of clusters
 static const int k_lfn_offsets[13] = {1, 3, 5, 7, 9, 14, 16, 18, 20, 22, 24, 28, 30};
@@ -201,14 +203,13 @@ bool VirtualFat::Open(const char* root)
     m_fat_sectors = ((k_part_sectors - k_reserved) / k_cluster_sectors + 2) * 4 / 512 + 1;
     m_clusters = (k_part_sectors - k_reserved - k_fat_count * m_fat_sectors) / k_cluster_sectors;
     m_data_start = k_part_start + k_reserved + k_fat_count * m_fat_sectors;
-    m_gb_clusters = m_clusters / 2;
-    m_next_cluster = 2;
+    m_next_cluster = k_fat_entries;
 
     std::string path(root);
     while (path.size() > 1 && path[path.size() - 1] == '/')
         path.erase(path.size() - 1);
     AddNode(path, true, 0, FatTime(st.st_mtime), -1);
-    Allocate(0, 1); // root folder starts at cluster 2
+    AppendRun(0, 2, 1); // root directory always occupies cluster 2
     m_open = true;
     List(0);
     Log("VirtualFat: SD card is %s", path.c_str());
@@ -234,17 +235,46 @@ int VirtualFat::AddNode(const std::string& path, bool dir, u32 size, u32 time, i
     return index;
 }
 
-bool VirtualFat::Allocate(int node, u32 count)
+// Host files use odd FAT sectors. Guest allocations can find free space in
+// every even FAT sector, including near a directory they are extending.
+// The first even sector also contains the root directory at cluster 2.
+static u32 HostClustersBefore(u32 cluster)
 {
-    if (m_next_cluster + count > m_gb_clusters)
-        return false;
-    Run run = {m_next_cluster, count};
+    const u32 pair = 2 * k_fat_entries;
+    const u32 remainder = cluster % pair;
+    return cluster / pair * k_fat_entries + (remainder > k_fat_entries ? remainder - k_fat_entries : 0);
+}
+
+u32 VirtualFat::HostClustersLeft() const
+{
+    if (m_next_cluster >= m_clusters + 2)
+        return 0;
+    return HostClustersBefore(m_clusters + 2) - HostClustersBefore(m_next_cluster);
+}
+
+void VirtualFat::AppendRun(int node, u32 first, u32 count)
+{
+    Run run = {first, count};
     Owner owner = {count, node, (int)m_nodes[node].runs.size()};
     m_owners[run.start] = owner;
     m_nodes[node].runs.push_back(run);
     if (!m_nodes[node].first)
         m_nodes[node].first = run.start;
-    m_next_cluster += count;
+}
+
+bool VirtualFat::Allocate(int node, u32 count)
+{
+    if (count > HostClustersLeft())
+        return false;
+    while (count)
+    {
+        if ((m_next_cluster / k_fat_entries) % 2 == 0)
+            m_next_cluster += k_fat_entries;
+        const u32 part = std::min(count, k_fat_entries - m_next_cluster % k_fat_entries);
+        AppendRun(node, m_next_cluster, part);
+        m_next_cluster += part;
+        count -= part;
+    }
     return true;
 }
 
@@ -352,6 +382,9 @@ void VirtualFat::AddEntries(std::vector<u8>& entries, const std::string& name, c
 void VirtualFat::List(int index)
 {
     m_nodes[index].listed = true;
+    // Publish a newly discovered directory's children in fresh FAT sectors.
+    // Earlier cached host chains keep their original interior cluster links.
+    m_next_cluster = (m_next_cluster + k_fat_entries - 1) / k_fat_entries * k_fat_entries;
 #if !defined(_WIN32)
     std::string path = m_nodes[index].path;
     std::vector<Item> items;
@@ -397,8 +430,8 @@ void VirtualFat::List(int index)
     for (size_t i = 0; i < items.size(); i++)
     {
         const Item& item = items[i];
-        u32 count = item.dir ? 1 : (item.size + k_cluster_bytes - 1) / k_cluster_bytes;
-        if (m_next_cluster + count > m_gb_clusters)
+        u32 count = item.dir ? 1 : item.size / k_cluster_bytes + (item.size % k_cluster_bytes != 0);
+        if (count > HostClustersLeft())
         {
             Log("VirtualFat: out of clusters listing %s", path.c_str());
             break;
@@ -445,18 +478,19 @@ bool VirtualFat::FindOwner(u32 cluster, int* node, u32* index)
     return true;
 }
 
-// FAT entry for the clusters given out for host files and folders, 0 (free) for the rest
+// Link allocated host clusters and reserve the remaining host slots.
 u32 VirtualFat::DerivedFat(u32 cluster)
 {
     if (cluster < 2)
         return cluster ? k_eoc : 0x0FFFFFF8;
+    const u32 unused = (cluster / k_fat_entries) % 2 ? k_host_reserved : 0;
     std::map<u32, Owner>::iterator it = m_owners.upper_bound(cluster);
     if (it == m_owners.begin())
-        return 0;
+        return unused;
     --it;
     const Owner& owner = it->second;
     if (cluster >= it->first + owner.count)
-        return 0;
+        return unused;
     if (cluster + 1 < it->first + owner.count)
         return cluster + 1;
     const std::vector<Run>& runs = m_nodes[owner.node].runs;
@@ -552,12 +586,12 @@ void VirtualFat::ReadSector(u32 lba, u8* data)
         data[511] = 0xAA;
         return;
     }
-    if (s == 1 || s == 7) // FSInfo, the Game Boy allocates from the middle of the disk
+    if (s == 1 || s == 7) // FSInfo, guest clusters follow the root
     {
         Put32(data, 0x41615252);
         Put32(data + 484, 0x61417272);
         Put32(data + 488, 0xFFFFFFFF);
-        Put32(data + 492, m_gb_clusters);
+        Put32(data + 492, 3);
         Put32(data + 508, 0xAA550000);
         return;
     }
@@ -568,9 +602,9 @@ void VirtualFat::ReadSector(u32 lba, u8* data)
     if (s < k_fat_count * m_fat_sectors)
     {
         s %= m_fat_sectors; // both copies describe the same virtual chains
-        for (u32 i = 0; i < 128; i++)
+        for (u32 i = 0; i < k_fat_entries; i++)
         {
-            u32 cluster = s * 128 + i;
+            u32 cluster = s * k_fat_entries + i;
             if (cluster < m_clusters + 2)
                 Put32(data + i * 4, FatEntry(cluster));
         }
@@ -590,12 +624,16 @@ void VirtualFat::WriteSector(u32 lba, const u8* data)
     u32 fat_start = k_part_start + k_reserved;
     if (lba >= fat_start && lba < fat_start + k_fat_count * m_fat_sectors)
     {
-        for (u32 i = 0; i < 128; i++)
+        for (u32 i = 0; i < k_fat_entries; i++)
         {
-            u32 cluster = ((lba - fat_start) % m_fat_sectors) * 128 + i;
+            u32 cluster = ((lba - fat_start) % m_fat_sectors) * k_fat_entries + i;
             if (cluster < 2 || cluster >= m_clusters + 2)
                 continue;
             u32 value = Get32(data + i * 4) & 0x0FFFFFFF;
+            // The guest can echo a FAT sector cached before the host listed
+            // its children. Preserve the chain that replaced the reservation.
+            if (value == k_host_reserved && (cluster / k_fat_entries) % 2)
+                continue;
             if (value == DerivedFat(cluster))
                 m_fat.erase(cluster);
             else
