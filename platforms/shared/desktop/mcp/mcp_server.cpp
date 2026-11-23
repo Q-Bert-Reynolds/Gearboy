@@ -1053,6 +1053,18 @@ json McpServer::BuildToolList()
 
     // Controller input tools
     tools.push_back({
+        {"name", "everdrive_cart_button"},
+        {"title", "EverDrive Cart Button"},
+        {"description", "Press the EverDrive cartridge button. Returns whether the press was accepted."},
+        {"annotations", {{"readOnlyHint", false}, {"destructiveHint", true}, {"idempotentHint", false}, {"openWorldHint", false}}},
+        {"inputSchema", {
+            {"type", "object"},
+            {"properties", json::object()},
+            {"additionalProperties", false}
+        }}
+    });
+
+    tools.push_back({
         {"name", "controller_button"},
         {"title", "Controller Button"},
         {"description", "Press/release/tap Game Boy input: up/down/left/right/a/b/start/select."},
@@ -2698,6 +2710,13 @@ json McpServer::ExecuteCommand(const std::string& toolName, const json& argument
     {
         int snapshot = arguments["snapshot"];
         return m_debugAdapter.RewindSeek(snapshot);
+    }
+    else if (normalizedTool == "everdrive_cart_button")
+    {
+        const bool enabled = emu_can_press_everdrive_button();
+        if (enabled)
+            emu_press_everdrive_button();
+        return {{"enabled", enabled}};
     }
     else if (normalizedTool == "controller_button")
     {

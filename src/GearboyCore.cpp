@@ -315,7 +315,7 @@ bool GearboyCore::RunToVBlank(u16* pFrameBuffer, s16* pSampleBuffer, int* pSampl
     if (IsValidPointer(m_pEverdriveGameRule))
     {
         MemoryRule* rule = m_pMemory->GetCurrentRule();
-        if (rule == m_pEverdriveGameRule && m_pInput->IsKeyPressed(Select_Key) && m_pInput->IsKeyPressed(Start_Key))
+        if (m_pInput->IsKeyPressed(Select_Key) && m_pInput->IsKeyPressed(Start_Key) && CanPressEverdriveButton())
             m_bEverdriveArmed = true; // the cart's system button combo
         if (rule == m_pEverdriveOSMemoryRule && m_pEverdriveOSMemoryRule->PeekSwitch() == 2)
             RebootEverdriveOS();
@@ -665,7 +665,7 @@ bool GearboyCore::IsEverdriveEnabled() const
 bool GearboyCore::CanPressEverdriveButton() const
 {
     return IsValidPointer(m_pEverdriveGameRule) && IsEverdriveEnabled() &&
-        m_pMemory->GetCurrentRule() == m_pEverdriveGameRule;
+        m_pMemory->GetCurrentRule() == m_pEverdriveGameRule && m_pEverdriveOSMemoryRule->IsButtonEnabled();
 }
 
 void GearboyCore::PressEverdriveButton()
