@@ -117,6 +117,7 @@ public:
     void Init();
     void Reset(bool bCGB, bool bGBA, bool bSGB = false);
     INLINE u8 RunFor(u8 ticks);
+    INLINE u8 RunFor(u8 ticks, unsigned int& elapsed);
     void RequestInterrupt(Interrupts interrupt);
     void ResetTIMACycles();
     void ResetDIVCycles();

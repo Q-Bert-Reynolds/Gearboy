@@ -55,6 +55,10 @@ public:
     const std::vector<u8>& GetImage();
     u8* GetSaveRAM();
     u8 GetCartridgeFeatures() const;
+    void AdvanceCycles(unsigned int cycles);
+    void BeginClockBatch(const unsigned int& cpu_clocks);
+    void SyncClockBatch();
+    void EndClockBatch();
     void GetGameRTC(u8* registers);
     void SetGameRTC(const u8* registers);
     void SetEverdriveFolder(const char* folder);
@@ -69,7 +73,14 @@ private:
     bool m_bLaunch;
     int m_Switch;
     u8 m_GameMBC[4];
-    u8 m_GameRTC[2][5]; // current MBC3 registers and reference calendar counter
+    enum { kReference = 0, kGame = 1 }; // $BD10 = calendar reference, $BD11 = MBC3
+    u8 m_GameRTC[2][5];
+    u8 m_LatchedRTC[2][5];
+    u32 m_RTCCycles[2];
+    const unsigned int* m_pClockBatchCycles;
+    unsigned int m_AccountedClockCycles;
+    bool m_ShadowEnabled;
+    void CaptureRTCShadow();
     u8 m_RTCIndex;
     u8 m_RTCLatch;
     std::vector<u8> m_File; // GBCOS.BIN as loaded, for a reboot into the OS

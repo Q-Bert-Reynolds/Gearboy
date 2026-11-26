@@ -26,6 +26,11 @@ EverdriveOSMemoryRule::EverdriveOSMemoryRule(Memory* pMemory, Cartridge* pCartri
     m_Switch = 0;
     memset(m_GameMBC, 0, sizeof(m_GameMBC));
     memset(m_GameRTC, 0, sizeof(m_GameRTC));
+    memset(m_LatchedRTC, 0, sizeof(m_LatchedRTC));
+    memset(m_RTCCycles, 0, sizeof(m_RTCCycles));
+    m_pClockBatchCycles = NULL;
+    m_AccountedClockCycles = 0;
+    m_ShadowEnabled = false;
     m_RTCIndex = m_RTCLatch = 0;
     m_pSave = new u8[k_save_size];
     memset(m_pSave, 0xFF, k_save_size);
@@ -69,7 +74,12 @@ u8* EverdriveOSMemoryRule::WindowByte(u16 address)
 {
     u32 offset = ((m_Block[1] << 8 | m_Block[0]) << 9) + (address - 0xBE00);
     if (m_Config & 0x02)
-        return &m_pSave[offset & (k_save_size - 1)];
+    {
+        const u32 ram_offset = offset & (k_save_size - 1);
+        if (m_ShadowEnabled && ram_offset >= 0x1FFF0 && ram_offset < 0x1FFFA)
+            SyncClockBatch();
+        return &m_pSave[ram_offset];
+    }
     return &m_pPSRAM[offset & (k_psram_size - 1)];
 }
 
@@ -88,7 +98,7 @@ u8 EverdriveOSMemoryRule::RegisterRead(u16 address)
         case 0xBD07: return m_Mapper;
         case 0xBD08: return m_Page;
         case 0xBD10: case 0xBD11:
-            return m_RTCIndex < 5 ? m_GameRTC[address - 0xBD10][m_RTCIndex] : 0;
+            return m_RTCIndex < 5 ? m_LatchedRTC[address - 0xBD10][m_RTCIndex] : 0;
         case 0xBD13: return m_RTCIndex;
         case 0xBD14: case 0xBD15: case 0xBD16: case 0xBD17: return m_GameMBC[address - 0xBD14]; // the game's mapper state
         default: return 0x00;
@@ -175,12 +185,31 @@ void EverdriveOSMemoryRule::PerformWrite(u16 address, u8 value)
                     break;
                 case 0xBD08: m_Page = value & 0x0F; break;
                 case 0xBD13: m_RTCIndex = value; break;
-                case 0xBD12: m_RTCLatch = value; break;
+                case 0xBD12:
+                    if (m_RTCLatch == 0 && value == 1)
+                    {
+                        SyncClockBatch();
+                        memcpy(m_LatchedRTC, m_GameRTC, sizeof(m_GameRTC));
+                    }
+                    m_RTCLatch = value;
+                    break;
                 case 0xBD10: case 0xBD11:
+                    SyncClockBatch();
                     if (m_RTCIndex < 5)
                     {
-                        m_GameRTC[address - 0xBD10][m_RTCIndex] = value;
-                        m_pSave[0x1FFF0 + m_RTCIndex * 2 + address - 0xBD10] = value;
+                        const unsigned port = address - 0xBD10;
+                        static const u8 masks[] = {0x3F, 0x3F, 0x1F, 0xFF, 0xC1};
+                        m_GameRTC[port][m_RTCIndex] = value & masks[m_RTCIndex];
+                        if (m_RTCIndex == 0)
+                            m_RTCCycles[port] = 0;
+                        if (m_ShadowEnabled)
+                            CaptureRTCShadow();
+                    }
+                    else if (address == 0xBD10 && m_RTCIndex == 6)
+                    {
+                        m_ShadowEnabled = (value & 1) != 0;
+                        if (m_ShadowEnabled)
+                            CaptureRTCShadow();
                     }
                     break;
                 case 0xBD09: // bit 1: resume at $0040, bit 2: select OS without resetting the CPU
@@ -264,9 +293,15 @@ void EverdriveOSMemoryRule::SaveState(std::ostream& stream)
     stream.write(reinterpret_cast<const char*>(&m_Config), sizeof(m_Config));
     stream.write(reinterpret_cast<const char*>(&m_Mapper), sizeof(m_Mapper));
     stream.write(reinterpret_cast<const char*>(&m_Page), sizeof(m_Page));
+    stream.write(reinterpret_cast<const char*>(m_GameRTC), sizeof(m_GameRTC));
+    stream.write(reinterpret_cast<const char*>(m_LatchedRTC), sizeof(m_LatchedRTC));
+    stream.write(reinterpret_cast<const char*>(m_RTCCycles), sizeof(m_RTCCycles));
+    stream.write(reinterpret_cast<const char*>(&m_RTCIndex), sizeof(m_RTCIndex));
+    stream.write(reinterpret_cast<const char*>(&m_RTCLatch), sizeof(m_RTCLatch));
+    stream.write(reinterpret_cast<const char*>(&m_ShadowEnabled), sizeof(m_ShadowEnabled));
 }
 
-void EverdriveOSMemoryRule::LoadState(std::istream& stream, u32)
+void EverdriveOSMemoryRule::LoadState(std::istream& stream, u32 version)
 {
     stream.read(reinterpret_cast<char*>(m_pOS), 0x20000);
     stream.read(reinterpret_cast<char*>(m_pSave), k_save_size);
@@ -275,12 +310,27 @@ void EverdriveOSMemoryRule::LoadState(std::istream& stream, u32)
     stream.read(reinterpret_cast<char*>(&m_Config), sizeof(m_Config));
     stream.read(reinterpret_cast<char*>(&m_Mapper), sizeof(m_Mapper));
     stream.read(reinterpret_cast<char*>(&m_Page), sizeof(m_Page));
-    // The paired RTC registers already live in the serialized SRAM shadow.
+
+    if (version >= GB_SAVESTATE_EVERDRIVE_RTC_VERSION)
+    {
+        stream.read(reinterpret_cast<char*>(m_GameRTC), sizeof(m_GameRTC));
+        stream.read(reinterpret_cast<char*>(m_LatchedRTC), sizeof(m_LatchedRTC));
+        stream.read(reinterpret_cast<char*>(m_RTCCycles), sizeof(m_RTCCycles));
+        stream.read(reinterpret_cast<char*>(&m_RTCIndex), sizeof(m_RTCIndex));
+        stream.read(reinterpret_cast<char*>(&m_RTCLatch), sizeof(m_RTCLatch));
+        stream.read(reinterpret_cast<char*>(&m_ShadowEnabled), sizeof(m_ShadowEnabled));
+        return;
+    }
+
+    // Older states stored only the RTC copy in cartridge SRAM.
     for (int i = 0; i < 5; i++)
     {
         m_GameRTC[0][i] = m_pSave[0x1FFF0 + i * 2];
         m_GameRTC[1][i] = m_pSave[0x1FFF1 + i * 2];
     }
+    memcpy(m_LatchedRTC, m_GameRTC, sizeof(m_GameRTC));
+    memset(m_RTCCycles, 0, sizeof(m_RTCCycles));
+    m_ShadowEnabled = false;
     m_RTCIndex = m_RTCLatch = 0;
 }
 
@@ -352,14 +402,75 @@ u8 EverdriveOSMemoryRule::GetCartridgeFeatures() const
     return m_Everdrive.GetCartridgeFeatures();
 }
 
+// A six-bit seconds/minutes or five-bit hours field carries at its normal
+// terminal count. A value written above that limit wraps at its bit width.
+static bool IncrementField(u8& value, u8 last, u8 mask)
+{
+    bool carry = (value == last);
+    value = carry ? 0 : (value + 1) & mask;
+    return carry;
+}
+
+// The paired MBC3 counters are independent of the calendar I2C device.
+void EverdriveOSMemoryRule::AdvanceCycles(unsigned int cycles)
+{
+    for (unsigned port = 0; port < 2; ++port)
+    {
+        u8* rtc = m_GameRTC[port];
+        if (rtc[4] & 0x40)
+            continue;
+        m_RTCCycles[port] += cycles;
+        while (m_RTCCycles[port] >= GEARBOY_MASTER_CLOCK_RATE)
+        {
+            m_RTCCycles[port] -= GEARBOY_MASTER_CLOCK_RATE;
+            if (IncrementField(rtc[0], 59, 0x3F) &&
+                IncrementField(rtc[1], 59, 0x3F) &&
+                IncrementField(rtc[2], 23, 0x1F) && ++rtc[3] == 0)
+            {
+                if (rtc[4] & 1)
+                    rtc[4] |= 0x80;
+                rtc[4] ^= 1;
+            }
+            if (m_ShadowEnabled)
+                CaptureRTCShadow();
+        }
+    }
+}
+
+void EverdriveOSMemoryRule::BeginClockBatch(const unsigned int& cpu_clocks)
+{
+    m_pClockBatchCycles = &cpu_clocks;
+    m_AccountedClockCycles = 0;
+}
+
+void EverdriveOSMemoryRule::SyncClockBatch()
+{
+    if (!m_pClockBatchCycles)
+        return;
+
+    const unsigned int elapsed = *m_pClockBatchCycles;
+    const unsigned int cycles = elapsed - m_AccountedClockCycles;
+    if (cycles != 0)
+    {
+        AdvanceCycles(cycles);
+        m_AccountedClockCycles = elapsed;
+    }
+}
+
+void EverdriveOSMemoryRule::EndClockBatch()
+{
+    SyncClockBatch();
+    m_pClockBatchCycles = NULL;
+}
+
 void EverdriveOSMemoryRule::GetGameRTC(u8* registers)
 {
-    memcpy(registers, m_GameRTC[0], 5);
+    memcpy(registers, m_GameRTC[kGame], 5);
 }
 
 void EverdriveOSMemoryRule::SetGameRTC(const u8* registers)
 {
-    memcpy(m_GameRTC[0], registers, 5);
+    memcpy(m_GameRTC[kGame], registers, 5);
     u8 calendar[16];
     if (m_Everdrive.GetClockRegisters(calendar))
     {
@@ -373,12 +484,17 @@ void EverdriveOSMemoryRule::SetGameRTC(const u8* registers)
         for (int month = 1; month < fields[5] && month <= 12; month++)
             days += month_days[month - 1] + ((month == 2) && ((fields[6] & 3) == 0));
         days += fields[4] - 1;
-        m_GameRTC[1][0] = (u8)fields[0];
-        m_GameRTC[1][1] = (u8)fields[1];
-        m_GameRTC[1][2] = (u8)fields[2];
-        m_GameRTC[1][3] = (u8)days;
-        m_GameRTC[1][4] = (u8)((days >> 8) & 1);
+        m_GameRTC[kReference][0] = (u8)fields[0];
+        m_GameRTC[kReference][1] = (u8)fields[1];
+        m_GameRTC[kReference][2] = (u8)fields[2];
+        m_GameRTC[kReference][3] = (u8)days;
+        m_GameRTC[kReference][4] = (u8)((days >> 8) & 1);
     }
+    CaptureRTCShadow();
+}
+
+void EverdriveOSMemoryRule::CaptureRTCShadow()
+{
     for (int i = 0; i < 5; i++)
     {
         m_pSave[0x1FFF0 + i * 2] = m_GameRTC[0][i];
