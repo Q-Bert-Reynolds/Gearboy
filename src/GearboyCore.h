@@ -173,11 +173,7 @@ public:
 
 private:
     INLINE bool HasActiveEverdrive() const;
-    template<bool ClockEverdrive>
-    INLINE bool RunCycle(u16* frame_buffer, unsigned int& clock_cycles, u8 ticks);
-    template<bool ClockEverdrive>
-    void RunFrameCycles(u16* frame_buffer, GB_Debug_Run* debug);
-
+    INLINE bool RunCycle(u16* frame_buffer, unsigned int& clocks, u8 ticks, unsigned int& elapsed);
     void RenderDMGFrame(u16* pFrameBuffer) const;
     void RenderDMGIndexFrame(u16* pFrameBuffer) const;
     void RenderSGBFrame(u16* pFrameBuffer);
@@ -270,18 +266,19 @@ INLINE bool GearboyCore::HasActiveEverdrive() const
 
 INLINE bool GearboyCore::RunCycle(u16* frame_buffer, unsigned int& clocks, u8 ticks)
 {
-    if (HasActiveEverdrive())
-        return RunCycle<true>(frame_buffer, clocks, ticks);
-    return RunCycle<false>(frame_buffer, clocks, ticks);
+    unsigned int elapsed = 0;
+    const bool everdrive_active = HasActiveEverdrive();
+    if (everdrive_active)
+        m_pEverdriveOSMemoryRule->BeginClockBatch(elapsed);
+    const bool vblank = RunCycle(frame_buffer, clocks, ticks, elapsed);
+    if (everdrive_active)
+        m_pEverdriveOSMemoryRule->EndClockBatch();
+    return vblank;
 }
 
-template<bool ClockEverdrive>
-INLINE bool GearboyCore::RunCycle(u16* frame_buffer, unsigned int& clocks, u8 ticks)
+INLINE bool GearboyCore::RunCycle(u16* frame_buffer, unsigned int& clocks, u8 ticks, unsigned int& elapsed)
 {
-    if (ClockEverdrive)
-        clocks = m_pProcessor->RunFor<true>(ticks, m_pEverdriveOSMemoryRule->BeginClockBatch());
-    else
-        clocks = m_pProcessor->RunFor(ticks);
+    clocks = m_pProcessor->RunFor(ticks, elapsed);
     if (unlikely(m_bEverdriveWatch))
         CheckEverdriveSwitch();
 
@@ -296,12 +293,11 @@ INLINE bool GearboyCore::RunCycle(u16* frame_buffer, unsigned int& clocks, u8 ti
 
     m_master_clock_cycles += clocks - cpu_clocks;
     m_link_cable_cycles += clocks - cpu_clocks;
+    elapsed += clocks - cpu_clocks;
 
     m_pAudio->Tick(clocks);
     m_pInput->Tick(clocks);
     m_pMBC3MemoryRule->Tick(clocks);
-    if (ClockEverdrive)
-        m_pEverdriveOSMemoryRule->EndClockBatch(clocks - cpu_clocks);
 
     SynchronizeLinkCable();
 

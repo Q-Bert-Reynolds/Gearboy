@@ -116,8 +116,8 @@ public:
     ~Processor();
     void Init();
     void Reset(bool bCGB, bool bGBA, bool bSGB = false);
-    template<bool CountRTCClocks = false>
-    INLINE u8 RunFor(u8 ticks, unsigned int* rtc_clocks = NULL);
+    INLINE u8 RunFor(u8 ticks);
+    INLINE u8 RunFor(u8 ticks, unsigned int& elapsed);
     void RequestInterrupt(Interrupts interrupt);
     void ResetTIMACycles();
     void ResetDIVCycles();

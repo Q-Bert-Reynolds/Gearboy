@@ -28,7 +28,8 @@ EverdriveOSMemoryRule::EverdriveOSMemoryRule(Memory* pMemory, Cartridge* pCartri
     memset(m_GameRTC, 0, sizeof(m_GameRTC));
     memset(m_LatchedRTC, 0, sizeof(m_LatchedRTC));
     memset(m_RTCCycles, 0, sizeof(m_RTCCycles));
-    m_ClockBatchCycles = m_AccountedClockCycles = 0;
+    m_pClockBatchCycles = NULL;
+    m_AccountedClockCycles = 0;
     m_ShadowEnabled = false;
     m_RTCIndex = m_RTCLatch = 0;
     m_pSave = new u8[k_save_size];
@@ -436,26 +437,30 @@ void EverdriveOSMemoryRule::AdvanceCycles(unsigned int cycles)
     }
 }
 
-unsigned int* EverdriveOSMemoryRule::BeginClockBatch()
+void EverdriveOSMemoryRule::BeginClockBatch(const unsigned int& cpu_clocks)
 {
-    m_ClockBatchCycles = m_AccountedClockCycles = 0;
-    return &m_ClockBatchCycles;
+    m_pClockBatchCycles = &cpu_clocks;
+    m_AccountedClockCycles = 0;
 }
 
 void EverdriveOSMemoryRule::SyncClockBatch()
 {
-    const unsigned int cycles = m_ClockBatchCycles - m_AccountedClockCycles;
+    if (!m_pClockBatchCycles)
+        return;
+
+    const unsigned int elapsed = *m_pClockBatchCycles;
+    const unsigned int cycles = elapsed - m_AccountedClockCycles;
     if (cycles != 0)
     {
         AdvanceCycles(cycles);
-        m_AccountedClockCycles = m_ClockBatchCycles;
+        m_AccountedClockCycles = elapsed;
     }
 }
 
-void EverdriveOSMemoryRule::EndClockBatch(unsigned int video_clocks)
+void EverdriveOSMemoryRule::EndClockBatch()
 {
-    m_ClockBatchCycles += video_clocks;
     SyncClockBatch();
+    m_pClockBatchCycles = NULL;
 }
 
 void EverdriveOSMemoryRule::GetGameRTC(u8* registers)

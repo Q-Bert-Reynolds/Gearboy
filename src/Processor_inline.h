@@ -789,14 +789,20 @@ inline void Processor::PopCallStack(u8 machine_cycles)
 #endif
 }
 
-template<bool CountRTCClocks>
-INLINE u8 Processor::RunFor(u8 ticks, unsigned int* rtc_clocks)
+INLINE u8 Processor::RunFor(u8 ticks)
 {
-    u8 executed = 0;
+    unsigned int elapsed = 0;
+    return RunFor(ticks, elapsed);
+}
+
+INLINE u8 Processor::RunFor(u8 ticks, unsigned int& elapsed)
+{
+    const unsigned int start = elapsed;
 
     assert(m_iMachineCycle == (unsigned int)(4 >> m_iSpeedMultiplier));
 
-    while (executed < ticks)
+    // Preserve the CPU's byte-sized scheduling while exposing the full DMA time.
+    while ((u8)(elapsed - start) < ticks)
     {
         m_iCurrentClockCycles = 0;
 #if !defined(GEARBOY_DISABLE_DISASSEMBLER)
@@ -968,13 +974,10 @@ INLINE u8 Processor::RunFor(u8 ticks, unsigned int* rtc_clocks)
             }
         }
 
-        executed += m_iCurrentClockCycles;
-        // Keep full DMA stalls in the RTC count even if the CPU batch wraps.
-        if (CountRTCClocks)
-            *rtc_clocks += m_iCurrentClockCycles;
+        elapsed += m_iCurrentClockCycles;
     }
 
-    return executed;
+    return (u8)(elapsed - start);
 }
 
 INLINE void Processor::UpdateTimers(u8 ticks)
