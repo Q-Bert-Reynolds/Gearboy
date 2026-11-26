@@ -56,6 +56,9 @@ public:
     u8* GetSaveRAM();
     u8 GetCartridgeFeatures() const;
     void AdvanceCycles(unsigned int cycles);
+    unsigned int* BeginClockBatch();
+    void SyncClockBatch();
+    void EndClockBatch(unsigned int video_clocks);
     void GetGameRTC(u8* registers);
     void SetGameRTC(const u8* registers);
     void SetEverdriveFolder(const char* folder);
@@ -74,6 +77,8 @@ private:
     u8 m_GameRTC[2][5];
     u8 m_LatchedRTC[2][5];
     u32 m_RTCCycles[2];
+    unsigned int m_ClockBatchCycles;
+    unsigned int m_AccountedClockCycles;
     bool m_ShadowEnabled;
     void CaptureRTCShadow();
     u8 m_RTCIndex;

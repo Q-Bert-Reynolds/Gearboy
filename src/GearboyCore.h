@@ -32,6 +32,7 @@
 #include "Audio.h"
 #include "Input.h"
 #include "MBC3MemoryRule.h"
+#include "EverdriveOSMemoryRule.h"
 
 class Memory;
 class Processor;
@@ -66,7 +67,6 @@ class GGB81MemoryRule;
 class HitekMemoryRule;
 class VF001MemoryRule;
 class SintaxMemoryRule;
-class EverdriveOSMemoryRule;
 class NTOldMemoryRule;
 class MemoryRule;
 class TraceLogger;
@@ -172,6 +172,12 @@ public:
     bool QueuePS2KeyboardScanCode(u8 scan_code);
 
 private:
+    INLINE bool HasActiveEverdrive() const;
+    template<bool ClockEverdrive>
+    INLINE bool RunCycle(u16* frame_buffer, unsigned int& clock_cycles, u8 ticks);
+    template<bool ClockEverdrive>
+    void RunFrameCycles(u16* frame_buffer, GB_Debug_Run* debug);
+
     void RenderDMGFrame(u16* pFrameBuffer) const;
     void RenderDMGIndexFrame(u16* pFrameBuffer) const;
     void RenderSGBFrame(u16* pFrameBuffer);
@@ -257,9 +263,25 @@ private:
     GB_LinkCableCallbacks m_LinkCableCallbacks;
 };
 
+INLINE bool GearboyCore::HasActiveEverdrive() const
+{
+    return m_pMemory->GetCurrentRule() == m_pEverdriveOSMemoryRule || IsValidPointer(m_pEverdriveGameRule);
+}
+
 INLINE bool GearboyCore::RunCycle(u16* frame_buffer, unsigned int& clocks, u8 ticks)
 {
-    clocks = m_pProcessor->RunFor(ticks);
+    if (HasActiveEverdrive())
+        return RunCycle<true>(frame_buffer, clocks, ticks);
+    return RunCycle<false>(frame_buffer, clocks, ticks);
+}
+
+template<bool ClockEverdrive>
+INLINE bool GearboyCore::RunCycle(u16* frame_buffer, unsigned int& clocks, u8 ticks)
+{
+    if (ClockEverdrive)
+        clocks = m_pProcessor->RunFor<true>(ticks, m_pEverdriveOSMemoryRule->BeginClockBatch());
+    else
+        clocks = m_pProcessor->RunFor(ticks);
     if (unlikely(m_bEverdriveWatch))
         CheckEverdriveSwitch();
 
@@ -278,6 +300,8 @@ INLINE bool GearboyCore::RunCycle(u16* frame_buffer, unsigned int& clocks, u8 ti
     m_pAudio->Tick(clocks);
     m_pInput->Tick(clocks);
     m_pMBC3MemoryRule->Tick(clocks);
+    if (ClockEverdrive)
+        m_pEverdriveOSMemoryRule->EndClockBatch(clocks - cpu_clocks);
 
     SynchronizeLinkCable();
 

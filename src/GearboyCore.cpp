@@ -222,6 +222,49 @@ void GearboyCore::Init(GB_Color_Format pixelFormat)
     m_pVideo->SetColorCorrection(m_ColorCorrectionLUT, m_bColorCorrectionEnabled);
 }
 
+template<bool ClockEverdrive>
+void GearboyCore::RunFrameCycles(u16* frame_buffer, GB_Debug_Run* debug)
+{
+#if defined(GEARBOY_DISABLE_DISASSEMBLER) && defined(PERFORMANCE)
+    const u8 ticks = 75;
+#else
+    const u8 ticks = 1;
+#endif
+#if defined(GEARBOY_DISABLE_DISASSEMBLER)
+    UNUSED(debug);
+#endif
+
+    int total_clocks = 0;
+    bool vblank;
+    do
+    {
+        unsigned int clocks;
+        vblank = RunCycle<ClockEverdrive>(frame_buffer, clocks, ticks);
+        total_clocks += clocks;
+
+#if !defined(GEARBOY_DISABLE_DISASSEMBLER)
+        if (IsValidPointer(debug))
+        {
+            if (debug->step_debugger && !m_pProcessor->DuringOpCode() && !m_pProcessor->Halted())
+                vblank = true;
+
+            if (m_pProcessor->MemoryBreakpointHit())
+                vblank = true;
+
+            if (m_pProcessor->BreakpointHit())
+                vblank = true;
+
+            if (debug->stop_on_run_to_breakpoint && m_pProcessor->RunToBreakpointHit())
+                vblank = true;
+        }
+#endif
+
+        if (total_clocks > GAMEBOY_CLOCKS_SAFE_LIMIT)
+            vblank = true;
+    }
+    while (!vblank);
+}
+
 bool GearboyCore::RunToVBlank(u16* pFrameBuffer, s16* pSampleBuffer, int* pSampleCount, bool bDMGbuffer, GB_Debug_Run* debug, bool render)
 {
     bool breakpoint_result = false;
@@ -237,78 +280,24 @@ bool GearboyCore::RunToVBlank(u16* pFrameBuffer, s16* pSampleBuffer, int* pSampl
 
     if (!m_bPaused && m_pCartridge->IsLoadedROM())
     {
-        int totalClocks = 0;
+        if (HasActiveEverdrive())
+            RunFrameCycles<true>(pFrameBuffer, debug);
+        else
+            RunFrameCycles<false>(pFrameBuffer, debug);
+
+        EndFrame(pSampleBuffer, pSampleCount);
+
+        if (render)
+        {
+            if (bDMGbuffer && !m_bCGB)
+                RenderDMGIndexFrame(pFrameBuffer);
+            else
+                RenderFrameBuffer(pFrameBuffer);
+        }
+
 #if !defined(GEARBOY_DISABLE_DISASSEMBLER)
-        bool vblank = false;
-
-        do
-        {
-            unsigned int clockCycles;
-            vblank = RunCycle(pFrameBuffer, clockCycles);
-            totalClocks += clockCycles;
-
-            if (debug_enable)
-            {
-                if (debug->step_debugger && !m_pProcessor->DuringOpCode() && !m_pProcessor->Halted())
-                    vblank = true;
-
-                if (m_pProcessor->MemoryBreakpointHit())
-                    vblank = true;
-
-                if (m_pProcessor->BreakpointHit())
-                    vblank = true;
-
-                if (debug->stop_on_run_to_breakpoint && m_pProcessor->RunToBreakpointHit())
-                    vblank = true;
-            }
-
-            if (totalClocks > GAMEBOY_CLOCKS_SAFE_LIMIT)
-                vblank = true;
-        }
-        while (!vblank);
-
-        EndFrame(pSampleBuffer, pSampleCount);
-
-        if (render)
-        {
-            if (bDMGbuffer && !m_bCGB)
-                RenderDMGIndexFrame(pFrameBuffer);
-            else
-                RenderFrameBuffer(pFrameBuffer);
-        }
-
         breakpoint_result = m_pProcessor->BreakpointHit() || m_pProcessor->RunToBreakpointHit();
-#else
-        UNUSED(debug);
-        bool vblank = false;
-
-        do
-        {
-            unsigned int clockCycles;
-            #ifdef PERFORMANCE
-                vblank = RunCycle(pFrameBuffer, clockCycles, 75);
-            #else
-                vblank = RunCycle(pFrameBuffer, clockCycles);
-            #endif
-            totalClocks += clockCycles;
-
-            if (totalClocks > GAMEBOY_CLOCKS_SAFE_LIMIT)
-                vblank = true;
-        }
-        while (!vblank);
-
-        EndFrame(pSampleBuffer, pSampleCount);
-
-        if (render)
-        {
-            if (bDMGbuffer && !m_bCGB)
-                RenderDMGIndexFrame(pFrameBuffer);
-            else
-                RenderFrameBuffer(pFrameBuffer);
-        }
 #endif
-        if (m_pMemory->GetCurrentRule() == m_pEverdriveOSMemoryRule || IsValidPointer(m_pEverdriveGameRule))
-            m_pEverdriveOSMemoryRule->AdvanceCycles(totalClocks);
     }
 
     if (m_pEverdriveOSMemoryRule->LaunchRequested())
@@ -418,6 +407,7 @@ void GearboyCore::CheckEverdriveSwitch()
 {
     if (m_pProcessor->GetState()->PC->GetValue() != 0x0040)
         return;
+    m_pEverdriveOSMemoryRule->SyncClockBatch();
     MemoryRule* rule = m_pMemory->GetCurrentRule();
     if (m_bEverdriveArmed && rule == m_pEverdriveGameRule)
     {

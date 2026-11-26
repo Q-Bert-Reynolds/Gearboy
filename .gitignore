@@ -108,6 +108,8 @@ platforms/libretro/libs/
 # EverDrive regression test executable
 tests/gearboy-everdrive-tests
 tests/gearboy-everdrive-rtc-tests
+tests/gearboy-everdrive-rtc-timing
+tests/gearboy-everdrive-rtc-timing-performance
 
 # iGKB protocol regression executable
 tests/gearboy-igkb-tests

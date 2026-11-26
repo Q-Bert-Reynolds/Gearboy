@@ -28,6 +28,7 @@ EverdriveOSMemoryRule::EverdriveOSMemoryRule(Memory* pMemory, Cartridge* pCartri
     memset(m_GameRTC, 0, sizeof(m_GameRTC));
     memset(m_LatchedRTC, 0, sizeof(m_LatchedRTC));
     memset(m_RTCCycles, 0, sizeof(m_RTCCycles));
+    m_ClockBatchCycles = m_AccountedClockCycles = 0;
     m_ShadowEnabled = false;
     m_RTCIndex = m_RTCLatch = 0;
     m_pSave = new u8[k_save_size];
@@ -72,7 +73,12 @@ u8* EverdriveOSMemoryRule::WindowByte(u16 address)
 {
     u32 offset = ((m_Block[1] << 8 | m_Block[0]) << 9) + (address - 0xBE00);
     if (m_Config & 0x02)
-        return &m_pSave[offset & (k_save_size - 1)];
+    {
+        const u32 ram_offset = offset & (k_save_size - 1);
+        if (m_ShadowEnabled && ram_offset >= 0x1FFF0 && ram_offset < 0x1FFFA)
+            SyncClockBatch();
+        return &m_pSave[ram_offset];
+    }
     return &m_pPSRAM[offset & (k_psram_size - 1)];
 }
 
@@ -180,10 +186,14 @@ void EverdriveOSMemoryRule::PerformWrite(u16 address, u8 value)
                 case 0xBD13: m_RTCIndex = value; break;
                 case 0xBD12:
                     if (m_RTCLatch == 0 && value == 1)
+                    {
+                        SyncClockBatch();
                         memcpy(m_LatchedRTC, m_GameRTC, sizeof(m_GameRTC));
+                    }
                     m_RTCLatch = value;
                     break;
                 case 0xBD10: case 0xBD11:
+                    SyncClockBatch();
                     if (m_RTCIndex < 5)
                     {
                         const unsigned port = address - 0xBD10;
@@ -424,6 +434,28 @@ void EverdriveOSMemoryRule::AdvanceCycles(unsigned int cycles)
                 CaptureRTCShadow();
         }
     }
+}
+
+unsigned int* EverdriveOSMemoryRule::BeginClockBatch()
+{
+    m_ClockBatchCycles = m_AccountedClockCycles = 0;
+    return &m_ClockBatchCycles;
+}
+
+void EverdriveOSMemoryRule::SyncClockBatch()
+{
+    const unsigned int cycles = m_ClockBatchCycles - m_AccountedClockCycles;
+    if (cycles != 0)
+    {
+        AdvanceCycles(cycles);
+        m_AccountedClockCycles = m_ClockBatchCycles;
+    }
+}
+
+void EverdriveOSMemoryRule::EndClockBatch(unsigned int video_clocks)
+{
+    m_ClockBatchCycles += video_clocks;
+    SyncClockBatch();
 }
 
 void EverdriveOSMemoryRule::GetGameRTC(u8* registers)

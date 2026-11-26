@@ -789,7 +789,8 @@ inline void Processor::PopCallStack(u8 machine_cycles)
 #endif
 }
 
-INLINE u8 Processor::RunFor(u8 ticks)
+template<bool CountRTCClocks>
+INLINE u8 Processor::RunFor(u8 ticks, unsigned int* rtc_clocks)
 {
     u8 executed = 0;
 
@@ -968,6 +969,9 @@ INLINE u8 Processor::RunFor(u8 ticks)
         }
 
         executed += m_iCurrentClockCycles;
+        // Keep full DMA stalls in the RTC count even if the CPU batch wraps.
+        if (CountRTCClocks)
+            *rtc_clocks += m_iCurrentClockCycles;
     }
 
     return executed;

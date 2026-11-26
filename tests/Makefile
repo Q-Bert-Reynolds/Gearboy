@@ -4,6 +4,7 @@ SERIAL_TARGET_NAME = gearboy-serial-tests
 LINK_CABLE_WIRE_TARGET_NAME = gearboy-link-cable-wire-tests
 LINK_CABLE_MANAGER_TARGET_NAME = gearboy-link-cable-manager-tests
 EVERDRIVE_RTC_TARGET_NAME = gearboy-everdrive-rtc-tests
+EVERDRIVE_RTC_TIMING_TARGETS = gearboy-everdrive-rtc-timing gearboy-everdrive-rtc-timing-performance
 GIT_VERSION := $(shell git describe --abbrev=7 --dirty --always --tags)
 UNAME_S := $(shell uname -s)
 PLATFORM = "undefined"
@@ -85,7 +86,7 @@ $(LINK_CABLE_MANAGER_TARGET_NAME): CPPFLAGS += -DLINK_CABLE_SHM_PREFIX=\"gearboy
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
 clean:
-	rm -f $(OBJECTS) $(SERIAL_TARGET_NAME) $(LINK_CABLE_WIRE_TARGET_NAME) $(LINK_CABLE_MANAGER_TARGET_NAME) gearboy-everdrive-tests $(EVERDRIVE_RTC_TARGET_NAME) gearboy-igkb-tests
+	rm -f $(OBJECTS) $(SERIAL_TARGET_NAME) $(LINK_CABLE_WIRE_TARGET_NAME) $(LINK_CABLE_MANAGER_TARGET_NAME) gearboy-everdrive-tests $(EVERDRIVE_RTC_TARGET_NAME) $(EVERDRIVE_RTC_TIMING_TARGETS) gearboy-igkb-tests
 	rm -rf $(SERIAL_TARGET_NAME).dSYM $(LINK_CABLE_WIRE_TARGET_NAME).dSYM $(LINK_CABLE_MANAGER_TARGET_NAME).dSYM
 
 # Compile these small independent components directly, without reusing the
@@ -105,6 +106,21 @@ $(EVERDRIVE_RTC_TARGET_NAME): everdrive_rtc_tests.cpp \
 		$(SRC_DIR)/Cartridge.cpp $(SRC_DIR)/EverdriveX.cpp $(SRC_DIR)/VirtualFat.cpp \
 		$(DEPS_DIR)/miniz/miniz.o
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -o $@ $(filter %.cpp %.o,$^) $(LDFLAGS)
+
+# Run the same ROMs through normal and batched core dispatch. Build separately
+# from the desktop and serial test objects, whose compile flags may differ.
+.PHONY: everdrive-rtc-timing
+everdrive-rtc-timing: $(EVERDRIVE_RTC_TIMING_TARGETS)
+	./gearboy-everdrive-rtc-timing
+	./gearboy-everdrive-rtc-timing-performance
+
+gearboy-everdrive-rtc-timing: RTC_TIMING_FLAGS = -UGEARBOY_DISABLE_DISASSEMBLER
+gearboy-everdrive-rtc-timing-performance: RTC_TIMING_FLAGS = -DPERFORMANCE
+$(EVERDRIVE_RTC_TIMING_TARGETS): everdrive_rtc_timing_tests.cpp $(SOURCES_CXX) \
+		$(addprefix $(SRC_DIR)/,EverdriveOSMemoryRule.cpp EverdriveX.cpp VirtualFat.cpp PS2Keyboard.cpp) \
+		$(wildcard $(SRC_DIR)/*.h $(SRC_DIR)/audio/*.h) $(DEPS_DIR)/miniz/miniz.o
+	$(CXX) $(CPPFLAGS) $(RTC_TIMING_FLAGS) $(CXXFLAGS) $(shell pkg-config --cflags sdl3) \
+		-o $@ $(filter %.cpp %.o,$^) $(LDFLAGS)
 
 .PHONY: igkb
 igkb: gearboy-igkb-tests
